@@ -1,5 +1,0 @@
-Combat v8 foundation
-- Route invalidation is treated as a combat event rather than a generic navigation failure.
-- Recovery can request a fresh target evaluation when crowd composition changes.
-- Recovery can switch from direct pursuit to a cutoff objective.
-- Target motion is used to rebuild short-horizon route goals.
