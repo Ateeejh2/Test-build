@@ -1,0 +1,45 @@
+name: Unzip root ZIP files
+on:
+  workflow_dispatch:
+    inputs:
+      zip_pattern:
+        description: "（任意）ルートで探す zip のパターン（デフォルト: *.zip）"
+        required: false
+        default: "*.zip"
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and unzip files in repository root
+        run: |
+          set -euo pipefail
+          pattern="${{ github.event.inputs.zip_pattern || '*.zip' }}"
+          echo "Using pattern: $pattern"
+          # expand pattern in repo root
+          shopt -s nullglob
+          cd "$GITHUB_WORKSPACE"
+          files=( $pattern )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No zip files found matching '$pattern' in repo root."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "Unzipping: $f -> repo root"
+            unzip -o "$f" -d .
+          done
+
+      - name: Commit and push extracted files (if any)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Unzip files from workflow"
+            git push
+          fi
