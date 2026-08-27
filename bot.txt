@@ -1,0 +1,260 @@
+package com.atlasdead.wanderbot.bot;
+
+import com.atlasdead.wanderbot.navigation.LocalAvoidanceController;
+import com.atlasdead.wanderbot.navigation.LookaheadController;
+import com.atlasdead.wanderbot.navigation.NavigationMemory;
+import com.atlasdead.wanderbot.navigation.PathValidator;
+import com.atlasdead.wanderbot.navigation.RecoveryController;
+import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
+import com.atlasdead.wanderbot.pit.CombatDecisionEngine;
+import com.atlasdead.wanderbot.pit.PitDecisionEngine;
+import com.atlasdead.wanderbot.pit.PitMode;
+import com.atlasdead.wanderbot.pathfinding.Path;
+import com.atlasdead.wanderbot.pathfinding.PathFinder;
+import com.atlasdead.wanderbot.pathfinding.PathNode;
+import com.atlasdead.wanderbot.rotation.RotationController;
+import com.atlasdead.wanderbot.stuck.StuckDetector;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.util.BlockPos;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
+
+/** Full navigation state machine: planning, smoothing/validation, steering, avoidance and recovery. */
+public class BotController {
+    private final Minecraft mc;
+    private final PathFinder pathFinder = new PathFinder();
+    private final RotationController rotation = new RotationController();
+    private final StuckDetector stuck = new StuckDetector();
+    private final MovementController movement;
+    private final TerrainAnalyzer terrain = new TerrainAnalyzer();
+    private final PathValidator validator = new PathValidator();
+    private final LookaheadController lookahead = new LookaheadController();
+    private final LocalAvoidanceController avoidance = new LocalAvoidanceController();
+    private final NavigationMemory memory = new NavigationMemory();
+    private final RecoveryController recovery = new RecoveryController();
+    private final PitDecisionEngine pit;
+    private final Random random = new Random();
+
+    private BotState state = BotState.OFF;
+    private Path path;
+    private BlockPos goal;
+    private int planCooldown;
+    private int validationCooldown;
+    private int replanCooldown;
+    private int jumpCooldown;
+    private int attackCooldown;
+
+    public BotController(Minecraft mc) {
+        this.mc = mc;
+        this.movement = new MovementController(mc);
+        this.pit = new PitDecisionEngine(mc);
+    }
+
+    public void toggle() { if (state == BotState.OFF) start(); else stop(); }
+
+    public void start() {
+        if (mc.thePlayer == null || mc.theWorld == null) return;
+        state = BotState.PLANNING;
+        path = null;
+        goal = null;
+        planCooldown = 0;
+        validationCooldown = 0;
+        replanCooldown = 0;
+        jumpCooldown = 0;
+        attackCooldown = 0;
+        pit.start();
+        stuck.reset(mc.thePlayer);
+        recovery.begin();
+    }
+
+    public void stop() {
+        state = BotState.OFF;
+        path = null;
+        goal = null;
+        pit.stop();
+        movement.release();
+    }
+
+    public void tick() {
+        EntityPlayerSP player = mc.thePlayer;
+        if (state == BotState.OFF) return;
+        if (player == null || mc.theWorld == null) { stop(); return; }
+
+        if (planCooldown > 0) planCooldown--;
+        if (validationCooldown > 0) validationCooldown--;
+        if (replanCooldown > 0) replanCooldown--;
+        if (jumpCooldown > 0) jumpCooldown--;
+        if (attackCooldown > 0) attackCooldown--;
+        movement.releaseJump();
+        movement.attack(false);
+
+        pit.tick();
+        PitMode pitMode = pit.getMode();
+        if (pitMode == PitMode.WAITING || pitMode == PitMode.WARMUP || pitMode == PitMode.UNSAFE || pitMode == PitMode.PAUSED) {
+            path = null;
+            goal = null;
+            movement.release();
+            return;
+        }
+
+        EntityPlayer target = pit.getTargets().getTarget();
+        if (pit.getZones().isSelfProtected(player)) {
+            path = null;
+            goal = null;
+            movement.release();
+            return;
+        }
+        if (target != null && pit.getZones().isPlayerProtected(target)) {
+            pit.getTargets().clear();
+            target = null;
+            path = null;
+            goal = null;
+        }
+        if (pit.getTargets().isViable(player, 18.0D)) {
+            CombatDecisionEngine.Result combatDecision = pit.evaluateCombat(player, target);
+            if (combatDecision.action == CombatDecisionEngine.Action.DISENGAGE) {
+                movement.release();
+                path = null;
+                goal = null;
+                int cooldown = pit.getStreak().shouldProtectStreak() ? 32 : 24;
+                pit.disengage(cooldown);
+                state = BotState.REPLANNING;
+                planCooldown = 0;
+                return;
+            }
+            if (combatDecision.action == CombatDecisionEngine.Action.RETARGET) {
+                path = null;
+                goal = null;
+                validationCooldown = 0;
+                replanCooldown = 0;
+                return;
+            }
+            if (combatDecision.action == CombatDecisionEngine.Action.ATTACK) {
+                handleAttackWindow(player, target);
+                return;
+            }
+            if (combatDecision.action == CombatDecisionEngine.Action.APPROACH) {
+                if (handleApproachTarget(player, target)) return;
+            }
+        } else if (pitMode == PitMode.RECOVERING) {
+            path = null;
+            goal = null;
+        }
+
+        if (state == BotState.RECOVERING) {
+            if (!recovery.tick(mc.theWorld, player, movement, player.motionX, player.motionZ)) {
+                memory.recordFailure(new BlockPos(player.posX, player.posY, player.posZ));
+                state = BotState.REPLANNING;
+                path = null;
+                planCooldown = 0;
+            }
+            return;
+        }
+
+        if (path == null || path.isFinished()) {
+            movement.release();
+            state = BotState.PLANNING;
+            findBestPath(player);
+            return;
+        }
+
+        advanceReached(player);
+        if (path == null || path.isFinished()) return;
+
+        if (validationCooldown == 0) {
+            validationCooldown = 4;
+            if (!validator.validate(mc.theWorld, path, 9)) {
+                requestReplan();
+                return;
+            }
+        }
+
+        if (replanCooldown == 0 && localHazard(player)) {
+            requestReplan();
+            return;
+        }
+
+        PathNode current = path.current();
+        boolean narrow = current != null && terrain.narrow(mc.theWorld, new BlockPos(current.x, current.y, current.z));
+        LookaheadController.Steering steering = lookahead.compute(player, path, narrow);
+
+        double desiredX = steering.dirX;
+        double desiredZ = steering.dirZ;
+        if (desiredX == 0.0D && desiredZ == 0.0D) {
+            desiredX = steering.x - player.posX;
+            desiredZ = steering.z - player.posZ;
+        }
+
+        LocalAvoidanceController.Result avoid = avoidance.choose(
+                mc.theWorld,
+                new BlockPos(player.posX, player.posY, player.posZ),
+                desiredX,
+                desiredZ
+        );
+
+        float yawError = rotation.tick(player, player.posX + avoid.x * 3.0D, steering.y, player.posZ + avoid.z * 3.0D, 0.0F);
+
+        boolean tightTurn = yawError > 78.0F;
+        boolean moderateTurn = yawError > 34.0F;
+        boolean sprintAllowed = player.onGround && yawError < (narrow ? 9.0F : 18.0F) && !avoid.avoiding && steering.lookahead > 1.6D;
+
+        if (tightTurn) {
+            movement.forward(false);
+            movement.sprint(false);
+            movement.strafe(avoid.deviation > 0.2D ? (avoid.x < desiredX ? -0.45F : 0.45F) : 0.0F);
+        } else {
+            movement.forward(true);
+            movement.strafe(strafeAmount(player, avoid.x, avoid.z));
+            movement.sprint(sprintAllowed);
+        }
+
+        if (shouldJump(player, current, steering, yawError)) {
+            state = BotState.JUMPING;
+            movement.jump();
+            jumpCooldown = 8;
+        } else if (state == BotState.JUMPING && !player.onGround) {
+            // Stay in jumping state until a landing occurs.
+        } else {
+            state = avoid.avoiding ? BotState.AVOIDING : (narrow ? BotState.NARROW : BotState.WALKING);
+        }
+
+        if (stuck.tick(player)) {
+            state = BotState.STUCK;
+            recovery.begin();
+            memory.recordFailure(new BlockPos(player.posX, player.posY, player.posZ));
+            path = null;
+            state = BotState.RECOVERING;
+        }
+    }
+
+    private void handleAttackWindow(EntityPlayerSP player, EntityPlayer target) {
+        double distance = player.getDistanceToEntity(target);
+        float yawError = rotation.tick(player, target.posX, target.posY + target.getEyeHeight() * 0.85D, target.posZ, 0.0F);
+        movement.forward(false);
+        movement.strafe(0.0F);
+        movement.sprint(false);
+        if (distance <= 3.35D && yawError <= 30.0F && player.canEntityBeSeen(target) && attackCooldown == 0) {
+            movement.attack(true);
+            attackCooldown = 8 + random.nextInt(4);
+        }
+        path = null;
+        goal = null;
+        state = BotState.WALKING;
+    }
+
+    private boolean handleApproachTarget(EntityPlayerSP player, EntityPlayer target) {
+        if (target == null || target.isDead || target.getHealth() <= 0.0F) return false;
+        BlockPos targetPos = new BlockPos(target.posX, target.posY, target.posZ);
+        boolean targetChanged = goal == null || Math.abs(goal.getX() - targetPos.getX()) > 2 || Math.abs(goal.getZ() - targetPos.getZ()) > 2;
+        if (targetChanged || path == null || path.isFinished()) {
+            Path targetPath = pathFinder.findHierarchicalPath(mc.theWorld, new BlockPos(player.posX, player.posY, player.posZ), targetPos, 45, 12000);
+            if (targetPath != null && !targetPath.isFinished()) {
+                path = targetPath;
+                goal = targetPos;
+                state = BotState.WALKING;
+                validationCooldown = 0;
