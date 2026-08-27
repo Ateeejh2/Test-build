@@ -1,9 +1,9 @@
-name: Unzip root ZIP files
+name: Unzip root ZIP files (do not change workflows)
 on:
   workflow_dispatch:
     inputs:
       zip_pattern:
-        description: "（任意）ルートで探す zip のパターン（デフォルト: *.zip)"
+        description: "（任意）ルートで探す zip のパターン（デフォルト: *.zip）"
         required: false
         default: "*.zip"
 
@@ -33,25 +33,27 @@ jobs:
             unzip -o "$f" -d .
           done
 
-      - name: Commit and push extracted files (using PAT)
-        env:
-          ACTIONS_PAT: ${{ secrets.ACTIONS_PAT }}
+      - name: Commit and push extracted files (exclude .github/workflows)
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage all changes
           git add -A
-          # If you don't want to overwrite workflow files with this push, uncomment the next line:
-          # git restore --staged .github/workflows || true
+
+          # Ensure workflow files are NOT staged/committed
+          # Unstage any changes under .github/workflows (safe if dir doesn't exist)
+          git restore --staged .github/workflows || true
+          git reset -- .github/workflows || true
+
+          # Also ensure untracked workflow files are not removed/added by cleaning later:
+          # (we don't run git clean here for unzip, but keep the pattern consistent)
+
           if git diff --staged --quiet; then
-            echo "No changes to commit."
+            echo "No changes to commit (excluding .github/workflows)."
             exit 0
           fi
-          git commit -m "Unzip files from workflow"
-          # Use personal access token to authenticate push so workflows can be created/updated
-          if [ -z "${ACTIONS_PAT}" ]; then
-            echo "ERROR: ACTIONS_PAT secret is empty. Please add a repository secret named ACTIONS_PAT with a PAT that has repo and workflow permissions."
-            exit 1
-          fi
-          git remote set-url origin "https://x-access-token:${ACTIONS_PAT}@github.com/${{ github.repository }}.git"
-          git push origin HEAD:${{ github.ref_name }}
+
+          git commit -m "Unzip files from workflow (excluding .github/workflows)"
+          git push
