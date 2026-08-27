@@ -1,0 +1,73 @@
+name: Move unzipped to repository root
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Target branch to move files into (default: main)'
+        required: true
+        default: 'main'
+      force_move:
+        description: 'Set to true to overwrite existing files in root (default: false)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Ensure unzipped exists
+        run: |
+          if [ ! -d unzipped ]; then
+            echo "unzipped directory not found at repository root"
+            exit 1
+          fi
+
+      - name: Check for conflicts (unless force_move=true)
+        if: ${{ github.event.inputs.force_move != 'true' }}
+        run: |
+          set -e
+          conflicts=0
+          # check regular and hidden files
+          for p in unzipped/* unzipped/.[!.]*; do
+            [ -e "$p" ] || continue
+            name=$(basename "$p")
+            if [ -e "$name" ]; then
+              echo "CONFLICT: $name already exists in repository root"
+              conflicts=1
+            fi
+          done
+          if [ "$conflicts" -eq 1 ]; then
+            echo "One or more conflicts found. Rerun with force_move=true to overwrite."
+            exit 1
+          fi
+
+      - name: Move files to repo root
+        run: |
+          # enable dotglob in bash to match hidden files when possible
+          bash -lc 'shopt -s dotglob; \
+          if [ "${{ github.event.inputs.force_move }}" = "true" ]; then \
+            mv -v unzipped/* . || true; mv -v unzipped/.[!.]* . || true; \
+          else \
+            mv -vn unzipped/* . || true; mv -vn unzipped/.[!.]* . || true; \
+          fi; \
+          rmdir unzipped || true'
+
+      - name: Create branch, commit and open PR
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: Move unzipped contents to repository root
+          title: Move unzipped contents to repository root
+          body: This PR moves files from unzipped/ into the repository root.
+          branch: move-unzipped-${{ github.run_id }}
+          base: ${{ github.event.inputs.target_branch }}
