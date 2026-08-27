@@ -1,0 +1,16 @@
+[
+  {
+    "modid": "wanderbot",
+    "name": "WanderBot",
+    "description": "Private Pit recreation autonomous navigation and streak AI.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "updateUrl": "",
+    "authorList": ["AtlasDead"],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]
