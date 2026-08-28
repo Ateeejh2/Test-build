@@ -54,7 +54,6 @@ public class TargetTracker {
 
         for (EntityPlayer candidate : players) {
             if (!isValidCandidate(candidate, self)) continue;
-            if (!isEligiblePitArmor(candidate)) continue;
             if (zones != null && zones.isPlayerProtected(candidate)) continue;
 
             double distance = self.getDistanceToEntity(candidate);
@@ -239,8 +238,7 @@ public class TargetTracker {
         return target != null
                 && !target.isDead
                 && target.getHealth() > 0.0F
-                && self.getDistanceToEntity(target) <= maxRange
-                && isEligiblePitArmor(target);
+                && self.getDistanceToEntity(target) <= maxRange;
     }
 
     public BlockPos targetFeet() {
