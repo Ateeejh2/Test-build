@@ -99,11 +99,21 @@ public final class CombatContext {
         return maxHealth > 0F ? selfHealth / maxHealth : 0F;
     }
 
-    /** Human-readable summary for HUD / debug. */
+    // Cached debug string to reduce per-tick allocations.
+    private String cachedDebugSummary;
+    private int lastDebugTick = -1;
+
+    /**
+     * Human-readable summary for HUD / debug.
+     * Cached for 10 ticks to reduce GC pressure.
+     */
     public String debugSummary() {
-        StringBuilder sb = new StringBuilder();
+        if (cachedDebugSummary != null && lastDebugTick == phaseTicks) {
+            return cachedDebugSummary;
+        }
+        StringBuilder sb = new StringBuilder(128);
         sb.append("Phase: ").append(currentPhase);
-        sb.append(" | HP: ").append(String.format("%.0f", selfHealth)).append("/").append(String.format("%.0f", maxHealth));
+        sb.append(" | HP: ").append((int) selfHealth).append("/").append((int) maxHealth);
         if (combatTarget != null) {
             sb.append(" | Target: ").append(combatTarget.getName());
             sb.append(" @ ").append(String.format("%.1f", targetDistance));
@@ -118,6 +128,8 @@ public final class CombatContext {
             sb.append(" | Escape: ").append(String.format("%.1f", bestEscapeCandidate.escapeScore));
         }
         sb.append(" | Decision: ").append(lastDecision);
-        return sb.toString();
+        cachedDebugSummary = sb.toString();
+        lastDebugTick = phaseTicks;
+        return cachedDebugSummary;
     }
 }

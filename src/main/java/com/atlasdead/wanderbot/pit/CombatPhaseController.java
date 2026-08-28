@@ -55,6 +55,8 @@ public final class CombatPhaseController {
     private int bowDecisionCooldown;
     private int retreatStabilityTicks;
     private int lastDamageTick;
+    private int escapeEvalCooldown;
+    private int absoluteTicks;
 
     public CombatPhaseController(Minecraft mc, MovementController movement, RotationController rotation,
                                   PitZoneManager zones, TargetTracker targets, StreakManager streak) {
@@ -81,6 +83,8 @@ public final class CombatPhaseController {
         bowDecisionCooldown = 0;
         retreatStabilityTicks = 0;
         lastDamageTick = 0;
+        escapeEvalCooldown = 0;
+        absoluteTicks = 0;
     }
 
     public CombatContext getContext() { return context; }
@@ -104,9 +108,11 @@ public final class CombatPhaseController {
         if (rearCheckCooldown > 0) rearCheckCooldown--;
         if (bowDecisionCooldown > 0) bowDecisionCooldown--;
 
-        // Time since last damage
-        if (self.hurtTime > 0) lastDamageTick = context.phaseTicks;
-        context.timeSinceLastDamage = context.phaseTicks - lastDamageTick;
+        // Time since last damage (use absolute tick counter, not phase-relative)
+        absoluteTicks++;
+        if (self.hurtTime > 0) lastDamageTick = absoluteTicks;
+        context.timeSinceLastDamage = absoluteTicks - lastDamageTick;
+        if (escapeEvalCooldown > 0) escapeEvalCooldown--;
 
         // Phase dispatch with priority
         CombatContext.Phase phase = context.currentPhase;
@@ -275,7 +281,8 @@ public final class CombatPhaseController {
         }
 
         // Evaluate escape routes if we don't have a current path or need re-evaluation
-        if (currentRetreatPath == null || retreatPathIndex <= 0 || context.phaseTicks % 20 == 0) {
+        if (escapeEvalCooldown <= 0 && (currentRetreatPath == null || retreatPathIndex <= 0 || context.phaseTicks % 20 == 0)) {
+            escapeEvalCooldown = 4; // Prevent eval loop when PathFinding fails
             List<EscapeCandidate> candidates = escapeEvaluator.evaluate(self, threats);
             if (!candidates.isEmpty()) {
                 EscapeCandidate best = candidates.get(0);
@@ -288,6 +295,8 @@ public final class CombatPhaseController {
                 if (retreatPath != null && !retreatPath.isFinished()) {
                     currentRetreatPath = retreatPath;
                     retreatPathIndex = 0;
+                } else {
+                    escapeEvalCooldown = 10; // Longer cooldown on failure
                 }
             }
         }

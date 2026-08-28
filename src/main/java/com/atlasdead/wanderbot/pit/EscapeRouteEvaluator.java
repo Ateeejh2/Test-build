@@ -157,8 +157,8 @@ public final class EscapeRouteEvaluator {
         int threatsCovered = 0;
         for (EntityPlayer t : threats) {
             if (t == null) continue;
-            double dx = t.posX - pos.getX();
-            double dz = t.posZ - pos.getZ();
+            double dx = t.posX - (pos.getX() + 0.5D);
+            double dz = t.posZ - (pos.getZ() + 0.5D);
             double dist = Math.sqrt(dx * dx + dz * dz);
             if (dist < 1D) continue;
             double nx = dx / dist;
