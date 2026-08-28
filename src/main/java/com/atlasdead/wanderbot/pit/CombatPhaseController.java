@@ -243,11 +243,10 @@ public final class CombatPhaseController {
             movement.sprint(false); // Stop sprint to strafe
         }
 
-        // Execute via existing CombatExecutionController
+        // Execute via existing CombatExecutionController (single attack path)
+        // NOTE: do NOT also call checkAndExecuteAttack() here — it sends
+        // a second clickAttack() per tick, causing CPS that triggers WatchDog.
         executor.tick(self, target, action, System.currentTimeMillis());
-
-        // Auto-attack: check conditions and execute via legitimate click
-        checkAndExecuteAttack(self, target, dist);
 
         context.lastDecision = action.name();
         context.lastDecisionReason = combatResult.reason;
