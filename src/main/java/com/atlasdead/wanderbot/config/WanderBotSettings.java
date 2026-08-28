@@ -40,7 +40,7 @@ public final class WanderBotSettings {
     public static double threatThreshold = 80.0D;
 
     // Humanization
-    public static boolean forcePitMode = false;
+    public static boolean forcePitMode = true;
     public static boolean humanizationEnabled = true;
     public static float aimErrorSD = 2.5F;
     public static float rotationSpeedSD = 0.15F;
@@ -151,7 +151,7 @@ public final class WanderBotSettings {
         bowMinHealth = 0.4D;
         recoverDelay = 10;
         threatThreshold = 80.0D;
-        forcePitMode = false;
+        forcePitMode = true;
         clamp();
         save();
     }
