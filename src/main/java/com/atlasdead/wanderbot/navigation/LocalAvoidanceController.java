@@ -7,23 +7,65 @@ import net.minecraft.world.World;
 public class LocalAvoidanceController {
     private final TerrainAnalyzer terrain = new TerrainAnalyzer();
 
+    /* --- Result cache (L1): reuses full choose() result across ticks --- */
+    private Result cachedResult;
+    private double cachedBaseX, cachedBaseZ;
+    private double cachedDesiredX, cachedDesiredZ;
+    private int cacheAge;
+    private boolean resultUnsafe;
+
+    /** Force recomputation on next choose() regardless of TTL. */
+    public void invalidate() {
+        cachedResult = null;
+        cacheAge = 999;
+        resultUnsafe = false;
+    }
+
+    /** Call once per game tick to age the cache. */
+    public void tick() {
+        cacheAge++;
+    }
+
     public Result choose(World world, BlockPos base, double desiredX, double desiredZ) {
         double desiredLen = Math.sqrt(desiredX * desiredX + desiredZ * desiredZ);
         if (desiredLen < 0.001D) return new Result(0.0D, 0.0D, false, 0.0D);
-        desiredX /= desiredLen;
-        desiredZ /= desiredLen;
+        double ndx = desiredX / desiredLen;
+        double ndz = desiredZ / desiredLen;
 
+        /* ---- L1 cache: reuse previous result when inputs are stable ---- */
+        if (cachedResult != null && !resultUnsafe && cacheAge < 3) {
+            double posDx = base.getX() + 0.5D - cachedBaseX;
+            double posDz = base.getZ() + 0.5D - cachedBaseZ;
+            if (posDx * posDx + posDz * posDz < 0.25D) {
+                double dot = ndx * cachedDesiredX + ndz * cachedDesiredZ;
+                if (dot > 0.866D) {
+                    return cachedResult;
+                }
+            }
+        }
+
+        /* ---- Full computation ---- */
         Candidate best = null;
         double[] angles = {-55, -35, -18, 0, 18, 35, 55, 80, -80, 105, -105};
         for (double angle : angles) {
             double rad = Math.toRadians(angle);
-            double x = desiredX * Math.cos(rad) - desiredZ * Math.sin(rad);
-            double z = desiredX * Math.sin(rad) + desiredZ * Math.cos(rad);
-            double score = score(world, base, x, z, desiredX, desiredZ);
-            if (best == null || score < best.score) best = new Candidate(x, z, score);
+            double x = ndx * Math.cos(rad) - ndz * Math.sin(rad);
+            double z = ndx * Math.sin(rad) + ndz * Math.cos(rad);
+            double sc = score(world, base, x, z, ndx, ndz);
+            if (best == null || sc < best.score) best = new Candidate(x, z, sc);
         }
         boolean avoiding = best != null && best.deviation > 0.20D;
-        return best == null ? new Result(desiredX, desiredZ, false, 0.0D) : new Result(best.x, best.z, avoiding, best.deviation);
+        Result result = best == null ? new Result(ndx, ndz, false, 0.0D) : new Result(best.x, best.z, avoiding, best.deviation);
+
+        /* ---- Store cache ---- */
+        cachedResult = result;
+        cachedBaseX = base.getX() + 0.5D;
+        cachedBaseZ = base.getZ() + 0.5D;
+        cachedDesiredX = ndx;
+        cachedDesiredZ = ndz;
+        cacheAge = 0;
+        resultUnsafe = avoiding;
+        return result;
     }
 
     private double score(World world, BlockPos base, double x, double z, double desiredX, double desiredZ) {

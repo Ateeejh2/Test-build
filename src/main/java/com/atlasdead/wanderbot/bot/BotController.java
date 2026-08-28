@@ -56,6 +56,20 @@ public class BotController {
     private int jumpCooldown;
     private int attackCooldown;
 
+    /* Validation cache: share validate() result between tick() and localHazard(). */
+    private Path lastValidatedPath;
+    private int lastValidatedIndex = -1;
+    private boolean lastValidationResult;
+
+    /* Perf counters – logged every 200 ticks. */
+    private int perfTicks;
+    private int validateCacheHits;
+    private int validateCacheMisses;
+
+    /* Avoidance invalidation tracking. */
+    private Path lastAvoidancePath;
+    private EntityPlayer lastAvoidanceTarget;
+
     public BotController(Minecraft mc) {
         this.mc = mc;
         this.movement = new MovementController(mc);
@@ -136,6 +150,31 @@ public class BotController {
         if (attackCooldown > 0) attackCooldown--;
         movement.releaseJump();
         movement.attack(false);
+
+        /* Tick avoidance cache age. */
+        avoidance.tick();
+
+        /* Invalidate avoidance when path reference changes (new path from findBestPath, etc). */
+        if (path != lastAvoidancePath) {
+            avoidance.invalidate();
+            lastAvoidancePath = path;
+        }
+        /* Invalidate avoidance when target changes. */
+        EntityPlayer tgtNow = pit.getTargets().getTarget();
+        if (tgtNow != lastAvoidanceTarget) {
+            avoidance.invalidate();
+            lastAvoidanceTarget = tgtNow;
+        }
+
+        /* Perf logging every 200 ticks. */
+        perfTicks++;
+        if (perfTicks >= 200) {
+            System.out.println("[WB-Perf] validate cache hits=" + validateCacheHits
+                    + " misses=" + validateCacheMisses + " / " + perfTicks + " ticks");
+            perfTicks = 0;
+            validateCacheHits = 0;
+            validateCacheMisses = 0;
+        }
 
         pit.tick();
         EntityPlayer targetForSearch = pit.getTargets().getTarget();
@@ -266,9 +305,17 @@ public class BotController {
         if (validationCooldown == 0) {
             validationCooldown = 4;
             if (!validator.validate(mc.theWorld, path, 9)) {
+                lastValidatedPath = path;
+                lastValidatedIndex = path.getIndex();
+                lastValidationResult = false;
+                validateCacheMisses++;
                 requestReplan();
                 return;
             }
+            lastValidatedPath = path;
+            lastValidatedIndex = path.getIndex();
+            lastValidationResult = true;
+            validateCacheMisses++;
         }
 
         if (replanCooldown == 0 && localHazard(player)) {
@@ -416,7 +463,18 @@ public class BotController {
         double lookX = -Math.sin(Math.toRadians(player.rotationYaw));
         double lookZ = Math.cos(Math.toRadians(player.rotationYaw));
         if (map != null && map.shouldAvoid(player, mc.theWorld, lookX, lookZ)) return true;
-        return path != null && !validator.validate(mc.theWorld, path, 4);
+        if (path == null) return false;
+        /* Reuse cached validation when path and index haven't changed. */
+        if (path == lastValidatedPath && path.getIndex() == lastValidatedIndex) {
+            validateCacheHits++;
+            return !lastValidationResult;
+        }
+        boolean valid = validator.validate(mc.theWorld, path, 4);
+        lastValidatedPath = path;
+        lastValidatedIndex = path.getIndex();
+        lastValidationResult = valid;
+        validateCacheMisses++;
+        return !valid;
     }
 
     private void advanceReached(EntityPlayerSP player) {
@@ -472,6 +530,7 @@ public class BotController {
         goal = best.goal;
         if (pit.getTargets().getTarget() == null) searchPatrol.beginGoal(goal, player);
         state = BotState.WALKING;
+        avoidance.invalidate();
         validationCooldown = 0;
         replanCooldown = 8;
         stuck.reset(player);
