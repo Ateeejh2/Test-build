@@ -240,13 +240,23 @@ public class BotController {
             return;
         }
 
-        if (path == null || path.isFinished() || searchPatrol.shouldReplan(target == null, goal)) {
-            movement.release();
-            path = null;
-            goal = null;
-            searchPatrol.clearActiveGoal();
-            state = BotState.PLANNING;
-            findBestPath(player);
+        boolean needsReplan = path == null || path.isFinished() || searchPatrol.shouldReplan(target == null, goal);
+        if (needsReplan) {
+            if (replanCooldown > 0) {
+                // Cooldown active – defer the replan but still clear stale path state
+                // so the bot does not steer along an invalid route.
+                movement.release();
+                path = null;
+                goal = null;
+                state = BotState.REPLANNING;
+            } else {
+                movement.release();
+                path = null;
+                goal = null;
+                searchPatrol.clearActiveGoal();
+                state = BotState.PLANNING;
+                findBestPath(player);
+            }
             return;
         }
 

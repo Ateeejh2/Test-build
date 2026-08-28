@@ -33,6 +33,36 @@ public class PathFinder {
     private static final int MAX_STEP_UP = 1;
     private static final int MAX_DROP = 3;
 
+    /* Per-search terrain query caches – cleared at the start of each findPath(). */
+    private static Map<String, Integer> localOpenSpaceCache;
+    private static Map<String, Integer> supportCountCache;
+
+    private static int cachedLocalOpenSpace(World world, BlockPos p) {
+        String k = key(p);
+        Integer v = localOpenSpaceCache.get(k);
+        if (v != null) return v;
+        int count = 0;
+        for (int[] d : DIRS) {
+            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
+        }
+        localOpenSpaceCache.put(k, count);
+        return count;
+    }
+
+    private static int cachedSupportCount(World world, BlockPos p, int radius) {
+        String k = key(p) + ":s" + radius;
+        Integer v = supportCountCache.get(k);
+        if (v != null) return v;
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (isSolidFloor(world, p.add(dx, -1, dz))) count++;
+            }
+        }
+        supportCountCache.put(k, count);
+        return count;
+    }
+
     public Path findPath(World world, BlockPos start, BlockPos goal, int maxDistance, int maxNodes) {
         if (world == null || start == null || goal == null) return null;
 
@@ -43,6 +73,9 @@ public class PathFinder {
 
         final Map<String, PathNode> nodes = new HashMap<String, PathNode>();
         final Map<String, Double> best = new HashMap<String, Double>();
+        localOpenSpaceCache = new HashMap<String, Integer>();
+        supportCountCache = new HashMap<String, Integer>();
+
         final Set<String> closed = new HashSet<String>();
         final PriorityQueue<PathNode> open = new PriorityQueue<PathNode>(256, new Comparator<PathNode>() {
             @Override
@@ -91,7 +124,8 @@ public class PathFinder {
                 String k = key(next);
                 if (closed.contains(k)) continue;
 
-                double edge = edgeCost(world, cp, next, prevDx, prevDz, g);
+                int openDirs = cachedLocalOpenSpace(world, next);
+                double edge = edgeCost(world, cp, next, prevDx, prevDz, g, openDirs);
                 double candidate = current.gCost + edge;
                 Double old = best.get(k);
                 if (old == null || candidate < old - 0.000001D) {
@@ -264,7 +298,7 @@ public class PathFinder {
                     BlockPos c = p.add(dx, dy, dz);
                     if (!canOccupy(world, c)) continue;
                     double score = dx * dx + dz * dz + Math.abs(dy) * 2.5D;
-                    score += dangerPenalty(world, c) * 0.7D;
+                    score += dangerPenalty(world, c, cachedLocalOpenSpace(world, c)) * 0.7D;
                     if (score < bestScore) {
                         bestScore = score;
                         best = c;
@@ -275,7 +309,7 @@ public class PathFinder {
         return best;
     }
 
-    private static double edgeCost(World world, BlockPos from, BlockPos to, int prevDx, int prevDz, BlockPos goal) {
+    private static double edgeCost(World world, BlockPos from, BlockPos to, int prevDx, int prevDz, BlockPos goal, int openDirs) {
         int dx = Integer.signum(to.getX() - from.getX());
         int dz = Integer.signum(to.getZ() - from.getZ());
         int dy = to.getY() - from.getY();
@@ -291,14 +325,13 @@ public class PathFinder {
             else if (prevDx != dx || prevDz != dz) cost += 0.12D;
         }
 
-        double danger = dangerPenalty(world, to);
+        double danger = dangerPenalty(world, to, openDirs);
         cost += danger;
 
-        int open = localOpenSpace(world, to);
-        if (open <= 1) cost += 4.5D;
-        else if (open == 2) cost += 2.0D;
-        else if (open == 3) cost += 0.45D;
-        else if (open >= 7) cost -= 0.08D;
+        if (openDirs <= 1) cost += 4.5D;
+        else if (openDirs == 2) cost += 2.0D;
+        else if (openDirs == 3) cost += 0.45D;
+        else if (openDirs >= 7) cost -= 0.08D;
 
         double before = horizontalDistance(from, goal);
         double after = horizontalDistance(to, goal);
@@ -307,29 +340,20 @@ public class PathFinder {
         return Math.max(0.05D, cost);
     }
 
-    private static double dangerPenalty(World world, BlockPos p) {
+    private static double dangerPenalty(World world, BlockPos p, int openDirs) {
         double penalty = 0.0D;
-        int support = supportCount(world, p, 1);
+        int support = cachedSupportCount(world, p, 1);
         if (support <= 2) penalty += 5.0D;
         else if (support <= 4) penalty += 1.0D;
 
         if (!isSafeDrop(world, p, MAX_DROP)) penalty += 0.0D;
 
-        int clearance = localOpenSpace(world, p);
-        if (clearance <= 1) penalty += 3.0D;
-        else if (clearance == 2) penalty += 0.8D;
+        if (openDirs <= 1) penalty += 3.0D;
+        else if (openDirs == 2) penalty += 0.8D;
         return penalty;
     }
 
-    private static int supportCount(World world, BlockPos p, int radius) {
-        int count = 0;
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                if (isSolidFloor(world, p.add(dx, -1, dz))) count++;
-            }
-        }
-        return count;
-    }
+    /* Original uncached version kept for external callers (TerrainAnalyzer etc). */
 
     public static int localOpenSpace(World world, BlockPos p) {
         int count = 0;
