@@ -504,8 +504,20 @@ public class BotController {
         BlockPos start = new BlockPos(player.posX, player.posY, player.posZ);
         List<BlockPos> candidates = chooseGoalCandidates(start);
         if (candidates.isEmpty()) {
-            planCooldown = 4;
-            return;
+            // Fallback: try short-range random forward positions
+            for (int i = 0; i < 12; i++) {
+                int dx = random.nextInt(11) - 5;
+                int dz = random.nextInt(11) - 5;
+                if (dx == 0 && dz == 0) continue;
+                BlockPos p = start.add(dx, 0, dz);
+                if (PathFinder.canOccupy(mc.theWorld, p)) {
+                    candidates.add(p);
+                }
+            }
+            if (candidates.isEmpty()) {
+                planCooldown = 4;
+                return;
+            }
         }
 
         List<PathChoice> choices = new ArrayList<PathChoice>();
