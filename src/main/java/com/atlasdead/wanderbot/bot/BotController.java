@@ -197,10 +197,11 @@ public class BotController {
         }
         PitMode pitMode = pit.getMode();
         com.atlasdead.wanderbot.pit.PitRulesEngine.State pitRules = pit.getRulesState();
-        if (pitMode == PitMode.WAITING || pitMode == PitMode.WARMUP || pitMode == PitMode.UNSAFE || pitMode == PitMode.PAUSED
+        if (!WanderBotSettings.forcePitMode
+                && (pitMode == PitMode.WAITING || pitMode == PitMode.WARMUP || pitMode == PitMode.UNSAFE || pitMode == PitMode.PAUSED
                 || pitRules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.EVENT
                 || pitRules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.WAITING
-                || pitRules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.WARMUP) {
+                || pitRules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.WARMUP)) {
             path = null;
             goal = null;
             movement.release();

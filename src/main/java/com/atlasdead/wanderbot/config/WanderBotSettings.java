@@ -40,6 +40,7 @@ public final class WanderBotSettings {
     public static double threatThreshold = 80.0D;
 
     // Humanization
+    public static boolean forcePitMode = false;
     public static boolean humanizationEnabled = true;
     public static float aimErrorSD = 2.5F;
     public static float rotationSpeedSD = 0.15F;
@@ -84,6 +85,7 @@ public final class WanderBotSettings {
         bowMinHealth = config.getFloat("bowMinHealth", "combat", (float) bowMinHealth, 0.1F, 0.8F, "Minimum health ratio for bow.");
         recoverDelay = config.getInt("recoverDelay", "combat", recoverDelay, 3, 30, "Recovery delay ticks.");
         threatThreshold = config.getFloat("threatThreshold", "combat", (float) threatThreshold, 20.0F, 150.0F, "Threat score retreat threshold.");
+        forcePitMode = config.getBoolean("forcePitMode", "bot", forcePitMode, "Bypass PitMode check for testing.");
         if (config.hasChanged()) config.save();
     }
 
@@ -116,6 +118,7 @@ public final class WanderBotSettings {
         config.get("combat", "bowMinHealth", (float) bowMinHealth).set((float) bowMinHealth);
         config.get("combat", "recoverDelay", recoverDelay).set(recoverDelay);
         config.get("combat", "threatThreshold", (float) threatThreshold).set((float) threatThreshold);
+        config.get("bot", "forcePitMode", forcePitMode).set(forcePitMode);
         config.get("humanization", "humanizationEnabled", humanizationEnabled).set(humanizationEnabled);
         config.save();
     }
@@ -148,6 +151,7 @@ public final class WanderBotSettings {
         bowMinHealth = 0.4D;
         recoverDelay = 10;
         threatThreshold = 80.0D;
+        forcePitMode = false;
         clamp();
         save();
     }

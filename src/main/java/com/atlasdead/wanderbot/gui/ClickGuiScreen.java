@@ -29,7 +29,8 @@ public class ClickGuiScreen extends GuiScreen {
             toggle(11,x,y+42,"Navigation",WanderBotSettings.navigationEnabled,()->setBool("nav"));
             toggle(12,x,y+84,"Combat",WanderBotSettings.combatEnabled,()->setBool("combat"));
             toggle(13,x,y+126,"Megastreak Strategy",WanderBotSettings.megastreakStrategy,()->setBool("mega"));
-            info(14,x,y+184,"Config: .minecraft/config/wanderbot.cfg");
+            toggle(17,x,y+168,"Force Pit Mode",WanderBotSettings.forcePitMode,()->{WanderBotSettings.forcePitMode=!WanderBotSettings.forcePitMode; WanderBotSettings.save();});
+            info(14,x,y+210,"Config: .minecraft/config/wanderbot.cfg");
             buttonList.add(new ValueButton(16,x,y+226,360,28,"Reset All Settings",()->{WanderBotSettings.resetDefaults(); if(WanderBotMod.BOT!=null)WanderBotMod.BOT.getPit().getStreakControl().setMegastreak(WanderBotSettings.megastreakId); initGui();}));
             info(15,x,y+268,"K = Bot toggle    Right Shift = GUI");
         } else if(category==Category.RENDER){
