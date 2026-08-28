@@ -102,7 +102,6 @@ public class TargetTracker {
     private boolean isValidCandidate(EntityPlayer candidate, EntityPlayerSP self) {
         if (candidate == null || candidate == self || candidate.isDead) return false;
         if (candidate.isInvisible()) return false;
-        if (candidate.capabilities != null && candidate.capabilities.isCreativeMode) return false;
         return candidate.getHealth() > 0.0F;
     }
 
