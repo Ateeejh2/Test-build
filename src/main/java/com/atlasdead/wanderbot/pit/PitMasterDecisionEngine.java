@@ -57,13 +57,15 @@ public final class PitMasterDecisionEngine {
 
     public Decision evaluate(EntityPlayerSP self, EntityPlayer target) {
         PitRuntimeSnapshot snapshot = pit.getRuntimeSnapshot();
-        if (self == null || mc == null || mc.theWorld == null || snapshot == null || snapshot.mode == PitMode.OFF) {
+        if (self == null || mc == null || mc.theWorld == null || snapshot == null ||
+                (!com.atlasdead.wanderbot.config.WanderBotSettings.forcePitMode && snapshot.mode == PitMode.OFF)) {
             return record(decision(snapshot, Action.WAIT, "runtime-off", 100.0D, 0.0D, null));
         }
 
         PitRulesEngine.State rules = snapshot.rules;
-        if (snapshot.mode == PitMode.WAITING || snapshot.mode == PitMode.WARMUP
-                || snapshot.mode == PitMode.PAUSED || snapshot.mode == PitMode.UNSAFE) {
+        if (!com.atlasdead.wanderbot.config.WanderBotSettings.forcePitMode
+                && (snapshot.mode == PitMode.WAITING || snapshot.mode == PitMode.WARMUP
+                || snapshot.mode == PitMode.PAUSED || snapshot.mode == PitMode.UNSAFE)) {
             return record(decision(snapshot, Action.WAIT, "pit-not-active", 100.0D, 0.0D, target));
         }
         if (snapshot.event != null && snapshot.event.major) {
