@@ -2,6 +2,7 @@ package com.atlasdead.wanderbot.pit;
 
 import com.atlasdead.wanderbot.bot.MovementController;
 import com.atlasdead.wanderbot.config.WanderBotSettings;
+import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
 import com.atlasdead.wanderbot.rotation.RotationController;
 import com.atlasdead.wanderbot.pathfinding.Path;
 import com.atlasdead.wanderbot.pathfinding.PathFinder;

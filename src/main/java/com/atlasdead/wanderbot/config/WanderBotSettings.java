@@ -92,18 +92,18 @@ public final class WanderBotSettings {
         config.getCategory("navigation").get("navRepathTicks").set(navRepathTicks);
         config.getCategory("navigation").get("lookaheadDistance").set(lookaheadDistance);
         config.getCategory("pit").get("megastreakId").set(megastreakId);
-        config.get("combat").get("escapeEvalRadius").set(escapeEvalRadius);
-        config.get("combat").get("escapeCandidateCount").set(escapeCandidateCount);
-        config.get("combat").get("chaserDetectArc").set(chaserDetectArc);
-        config.get("combat").get("chaserMinDistance").set(chaserMinDistance);
-        config.get("combat").get("chaserMaxDistance").set(chaserMaxDistance);
-        config.get("combat").get("chaserDotThreshold").set(chaserDotThreshold);
-        config.get("combat").get("chaserPersistence").set(chaserPersistence);
-        config.get("combat").get("bowMinDistance").set(bowMinDistance);
-        config.get("combat").get("bowMaxDistance").set(bowMaxDistance);
-        config.get("combat").get("bowMinHealth").set(bowMinHealth);
-        config.get("combat").get("recoverDelay").set(recoverDelay);
-        config.get("combat").get("threatThreshold").set(threatThreshold);
+        config.getCategory("combat").get("escapeEvalRadius").set(escapeEvalRadius);
+        config.getCategory("combat").get("escapeCandidateCount").set(escapeCandidateCount);
+        config.getCategory("combat").get("chaserDetectArc").set(chaserDetectArc);
+        config.getCategory("combat").get("chaserMinDistance").set(chaserMinDistance);
+        config.getCategory("combat").get("chaserMaxDistance").set(chaserMaxDistance);
+        config.getCategory("combat").get("chaserDotThreshold").set(chaserDotThreshold);
+        config.getCategory("combat").get("chaserPersistence").set(chaserPersistence);
+        config.getCategory("combat").get("bowMinDistance").set(bowMinDistance);
+        config.getCategory("combat").get("bowMaxDistance").set(bowMaxDistance);
+        config.getCategory("combat").get("bowMinHealth").set(bowMinHealth);
+        config.getCategory("combat").get("recoverDelay").set(recoverDelay);
+        config.getCategory("combat").get("threatThreshold").set(threatThreshold);
         config.save();
     }
 
