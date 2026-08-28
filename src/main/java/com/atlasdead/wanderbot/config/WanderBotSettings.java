@@ -25,6 +25,20 @@ public final class WanderBotSettings {
     public static boolean debugDashboard = true;
     public static String megastreakId = "overdrive";
 
+    // Combat Phase Controller
+    public static double escapeEvalRadius = 20.0D;
+    public static int escapeCandidateCount = 12;
+    public static double chaserDetectArc = 180.0D;
+    public static double chaserMinDistance = 5.0D;
+    public static double chaserMaxDistance = 15.0D;
+    public static double chaserDotThreshold = 0.7D;
+    public static int chaserPersistence = 5;
+    public static double bowMinDistance = 8.0D;
+    public static double bowMaxDistance = 30.0D;
+    public static double bowMinHealth = 0.4D;
+    public static int recoverDelay = 10;
+    public static double threatThreshold = 80.0D;
+
     private static Configuration config;
 
     public static void load(File configDir) {
@@ -46,6 +60,18 @@ public final class WanderBotSettings {
         navRepathTicks = config.getInt("navRepathTicks", "navigation", navRepathTicks, 2, 40, "Navigation replan cadence.");
         lookaheadDistance = config.getFloat("lookaheadDistance", "navigation", (float) lookaheadDistance, 1.0F, 8.0F, "Navigation lookahead distance.");
         megastreakId = config.getString("megastreakId", "pit", megastreakId, "Selected megastreak id.");
+        escapeEvalRadius = config.getFloat("escapeEvalRadius", "combat", (float) escapeEvalRadius, 8.0F, 40.0F, "Escape candidate evaluation radius.");
+        escapeCandidateCount = config.getInt("escapeCandidateCount", "combat", escapeCandidateCount, 4, 24, "Number of escape candidates.");
+        chaserDetectArc = config.getFloat("chaserDetectArc", "combat", (float) chaserDetectArc, 60.0F, 360.0F, "Chaser detection arc degrees.");
+        chaserMinDistance = config.getFloat("chaserMinDistance", "combat", (float) chaserMinDistance, 2.0F, 10.0F, "Minimum chaser detection distance.");
+        chaserMaxDistance = config.getFloat("chaserMaxDistance", "combat", (float) chaserMaxDistance, 8.0F, 30.0F, "Maximum chaser detection distance.");
+        chaserDotThreshold = config.getFloat("chaserDotThreshold", "combat", (float) chaserDotThreshold, 0.3F, 0.95F, "Chaser approach dot threshold.");
+        chaserPersistence = config.getInt("chaserPersistence", "combat", chaserPersistence, 2, 12, "Chaser persistence ticks.");
+        bowMinDistance = config.getFloat("bowMinDistance", "combat", (float) bowMinDistance, 4.0F, 15.0F, "Minimum bow distance.");
+        bowMaxDistance = config.getFloat("bowMaxDistance", "combat", (float) bowMaxDistance, 15.0F, 50.0F, "Maximum bow distance.");
+        bowMinHealth = config.getFloat("bowMinHealth", "combat", (float) bowMinHealth, 0.1F, 0.8F, "Minimum health ratio for bow.");
+        recoverDelay = config.getInt("recoverDelay", "combat", recoverDelay, 3, 30, "Recovery delay ticks.");
+        threatThreshold = config.getFloat("threatThreshold", "combat", (float) threatThreshold, 20.0F, 150.0F, "Threat score retreat threshold.");
         if (config.hasChanged()) config.save();
     }
 
@@ -66,6 +92,18 @@ public final class WanderBotSettings {
         config.getCategory("navigation").get("navRepathTicks").set(navRepathTicks);
         config.getCategory("navigation").get("lookaheadDistance").set(lookaheadDistance);
         config.getCategory("pit").get("megastreakId").set(megastreakId);
+        config.get("combat").get("escapeEvalRadius").set(escapeEvalRadius);
+        config.get("combat").get("escapeCandidateCount").set(escapeCandidateCount);
+        config.get("combat").get("chaserDetectArc").set(chaserDetectArc);
+        config.get("combat").get("chaserMinDistance").set(chaserMinDistance);
+        config.get("combat").get("chaserMaxDistance").set(chaserMaxDistance);
+        config.get("combat").get("chaserDotThreshold").set(chaserDotThreshold);
+        config.get("combat").get("chaserPersistence").set(chaserPersistence);
+        config.get("combat").get("bowMinDistance").set(bowMinDistance);
+        config.get("combat").get("bowMaxDistance").set(bowMaxDistance);
+        config.get("combat").get("bowMinHealth").set(bowMinHealth);
+        config.get("combat").get("recoverDelay").set(recoverDelay);
+        config.get("combat").get("threatThreshold").set(threatThreshold);
         config.save();
     }
 
@@ -85,6 +123,18 @@ public final class WanderBotSettings {
         lookaheadDistance = 3.5D;
         debugDashboard = true;
         megastreakId = "overdrive";
+        escapeEvalRadius = 20.0D;
+        escapeCandidateCount = 12;
+        chaserDetectArc = 180.0D;
+        chaserMinDistance = 5.0D;
+        chaserMaxDistance = 15.0D;
+        chaserDotThreshold = 0.7D;
+        chaserPersistence = 5;
+        bowMinDistance = 8.0D;
+        bowMaxDistance = 30.0D;
+        bowMinHealth = 0.4D;
+        recoverDelay = 10;
+        threatThreshold = 80.0D;
         clamp();
         save();
     }
@@ -96,5 +146,12 @@ public final class WanderBotSettings {
         crowdThreshold = Math.max(1, Math.min(8, crowdThreshold));
         navRepathTicks = Math.max(2, Math.min(40, navRepathTicks));
         lookaheadDistance = Math.max(1.0D, Math.min(8.0D, lookaheadDistance));
+        escapeEvalRadius = Math.max(8.0D, Math.min(40.0D, escapeEvalRadius));
+        escapeCandidateCount = Math.max(4, Math.min(24, escapeCandidateCount));
+        chaserMaxDistance = Math.max(8.0D, Math.min(30.0D, chaserMaxDistance));
+        chaserMinDistance = Math.max(2.0D, Math.min(10.0D, chaserMinDistance));
+        bowMinDistance = Math.max(4.0D, Math.min(15.0D, bowMinDistance));
+        bowMaxDistance = Math.max(15.0D, Math.min(50.0D, bowMaxDistance));
+        recoverDelay = Math.max(3, Math.min(30, recoverDelay));
     }
 }

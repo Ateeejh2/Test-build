@@ -17,6 +17,12 @@ public final class CombatTelemetry {
     public final float selfHealth;
     public final float targetHealth;
 
+    // Combat Phase Controller fields
+    public final String combatPhase;
+    public final String chaserName;
+    public final double escapeScore;
+    public final String decisionReason;
+
     public CombatTelemetry(CombatStateMachine.Phase phase,
                            CombatDecisionEngine.Action action,
                            double threatScore,
@@ -42,6 +48,10 @@ public final class CombatTelemetry {
         this.feedback = "none";
         this.selfHealth = -1.0F;
         this.targetHealth = -1.0F;
+        this.combatPhase = null;
+        this.chaserName = null;
+        this.escapeScore = 0D;
+        this.decisionReason = null;
     }
 
     public CombatTelemetry(CombatStateMachine.Phase phase,
@@ -65,12 +75,50 @@ public final class CombatTelemetry {
         this.feedback = feedback;
         this.selfHealth = selfHealth;
         this.targetHealth = targetHealth;
+        this.combatPhase = null;
+        this.chaserName = null;
+        this.escapeScore = 0D;
+        this.decisionReason = null;
     }
 
     public CombatTelemetry withFeedback(String feedback, float selfHealth, float targetHealth) {
         return new CombatTelemetry(phase, action, threatScore, combatScore, crowdPressure, visible, distance,
                 navigationOutcome, megastreakId, streak, reason, feedback == null ? "none" : feedback,
-                selfHealth, targetHealth);
+                selfHealth, targetHealth, combatPhase, chaserName, escapeScore, decisionReason);
+    }
+
+    private CombatTelemetry(CombatStateMachine.Phase phase,
+                           CombatDecisionEngine.Action action,
+                           double threatScore, double combatScore, int crowdPressure,
+                           boolean visible, double distance,
+                           CombatNavigationCoordinator.Outcome navigationOutcome,
+                           String megastreakId, int streak, String reason,
+                           String feedback, float selfHealth, float targetHealth,
+                           String combatPhase, String chaserName, double escapeScore, String decisionReason) {
+        this.phase = phase;
+        this.action = action;
+        this.threatScore = threatScore;
+        this.combatScore = combatScore;
+        this.crowdPressure = crowdPressure;
+        this.visible = visible;
+        this.distance = distance;
+        this.navigationOutcome = navigationOutcome;
+        this.megastreakId = megastreakId;
+        this.streak = streak;
+        this.reason = reason;
+        this.feedback = feedback == null ? "none" : feedback;
+        this.selfHealth = selfHealth;
+        this.targetHealth = targetHealth;
+        this.combatPhase = combatPhase;
+        this.chaserName = chaserName;
+        this.escapeScore = escapeScore;
+        this.decisionReason = decisionReason;
+    }
+
+    public CombatTelemetry withPhaseInfo(String combatPhase, String chaserName, double escapeScore, String decisionReason) {
+        return new CombatTelemetry(phase, action, threatScore, combatScore, crowdPressure, visible, distance,
+                navigationOutcome, megastreakId, streak, reason, feedback,
+                selfHealth, targetHealth, combatPhase, chaserName, escapeScore, decisionReason);
     }
 
     public static CombatTelemetry idle() {

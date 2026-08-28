@@ -8,7 +8,9 @@ import com.atlasdead.wanderbot.navigation.PathValidator;
 import com.atlasdead.wanderbot.navigation.RecoveryController;
 import com.atlasdead.wanderbot.navigation.SearchPatrolController;
 import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
+import com.atlasdead.wanderbot.pit.CombatContext;
 import com.atlasdead.wanderbot.pit.CombatDecisionEngine;
+import com.atlasdead.wanderbot.pit.CombatPhaseController;
 import com.atlasdead.wanderbot.pit.PitDecisionEngine;
 import com.atlasdead.wanderbot.pit.PitMode;
 import com.atlasdead.wanderbot.pit.PitRuntimeGuard;
@@ -46,6 +48,7 @@ public class BotController {
     private final com.atlasdead.wanderbot.pit.CombatExecutionController combatExecutor;
     private final com.atlasdead.wanderbot.pit.PitExecutionOrchestrator executorRouter = new com.atlasdead.wanderbot.pit.PitExecutionOrchestrator();
     private final PitRuntimeGuard runtimeGuard = new PitRuntimeGuard();
+    private CombatPhaseController combatPhaseController;
 
     private BotState state = BotState.OFF;
     private Path path;
@@ -77,6 +80,8 @@ public class BotController {
         this.combatExecutor = new com.atlasdead.wanderbot.pit.CombatExecutionController(mc, movement, rotation);
         this.pit.attachCombatExecutor(combatExecutor);
         this.combatExecutor.bindMegastreakProfile(this.pit.getStreakControl().getActiveMegastreak());
+        this.combatPhaseController = new CombatPhaseController(mc, movement, rotation,
+                pit.getZones(), pit.getTargets(), pit.getStreak());
     }
 
     public void toggle() { if (state == BotState.OFF) start(); else stop(); }
@@ -94,6 +99,7 @@ public class BotController {
         pit.start();
         runtimeGuard.reset();
         combatExecutor.reset();
+        combatPhaseController.reset();
         stuck.reset(mc.thePlayer);
         recovery.begin();
         searchPatrol.reset();
@@ -178,7 +184,17 @@ public class BotController {
 
         pit.tick();
         EntityPlayer targetForSearch = pit.getTargets().getTarget();
-        searchPatrol.tick(player, targetForSearch == null);
+        /* Only tick searchPatrol when CombatPhaseController is not managing combat
+           (i.e. in SEARCH phase or combat disabled). */
+        CombatContext.Phase combatPhase = combatPhaseController.getContext().currentPhase;
+        boolean combatActive = WanderBotSettings.combatEnabled
+                && (combatPhase == CombatContext.Phase.ENGAGE
+                || combatPhase == CombatContext.Phase.RETREAT
+                || combatPhase == CombatContext.Phase.REAR_CHECK
+                || combatPhase == CombatContext.Phase.BOW_DECISION);
+        if (!combatActive) {
+            searchPatrol.tick(player, targetForSearch == null);
+        }
         PitMode pitMode = pit.getMode();
         com.atlasdead.wanderbot.pit.PitRulesEngine.State pitRules = pit.getRulesState();
         if (pitMode == PitMode.WAITING || pitMode == PitMode.WARMUP || pitMode == PitMode.UNSAFE || pitMode == PitMode.PAUSED
@@ -223,32 +239,17 @@ public class BotController {
                 break;
             case COMBAT:
                 if (directive.target != null && pit.getTargets().isViable(player, WanderBotSettings.targetScanRange)) {
-                    CombatDecisionEngine.Result combatDecision = pit.evaluateCombat(player, directive.target);
-                    if (combatDecision.action == CombatDecisionEngine.Action.DISENGAGE) {
-                        movement.release();
-                        path = null;
-                        goal = null;
-                        int cooldown = pit.getStreak().shouldProtectStreak() ? 32 : 24;
-                        pit.disengage(cooldown);
-                        state = BotState.REPLANNING;
-                        planCooldown = 0;
-                        return;
-                    }
-                    if (combatDecision.action == CombatDecisionEngine.Action.RETARGET) {
-                        path = null;
-                        goal = null;
-                        validationCooldown = 0;
-                        replanCooldown = 0;
-                        return;
-                    }
-                    if (combatDecision.action == CombatDecisionEngine.Action.ATTACK
-                            || combatDecision.action == CombatDecisionEngine.Action.APPROACH) {
-                        combatExecutor.tick(player, directive.target, combatDecision.action, System.currentTimeMillis());
-                        path = null;
-                        goal = null;
+                    CombatPhaseController.TickResult combatResult =
+                            combatPhaseController.tick(player, directive.target, state == BotState.RECOVERING);
+                    if (combatResult.handled) {
+                        if (combatResult.clearedPath) {
+                            path = null;
+                            goal = null;
+                        }
                         state = BotState.WALKING;
                         return;
                     }
+                    // SEARCH phase: fall through to normal navigation/patrol
                 }
                 break;
             case NAVIGATION:
@@ -617,6 +618,7 @@ public class BotController {
     public int getLocalStreak() { return pit.getStreak().getEffectiveStreak(); }
     public com.atlasdead.wanderbot.pit.StreakManager.Tier getStreakTier() { return pit.getStreak().getTier(); }
     public int getPeakStreak() { return pit.getStreak().getPeakStreak(); }
+    public CombatContext getCombatContext() { return combatPhaseController.getContext(); }
     private static final class PathChoice {
         final Path path;
         final BlockPos goal;
