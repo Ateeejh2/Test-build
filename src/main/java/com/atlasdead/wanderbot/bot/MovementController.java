@@ -1,5 +1,6 @@
 package com.atlasdead.wanderbot.bot;
 
+import com.atlasdead.wanderbot.humanization.Humanizer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.settings.KeyBinding;
@@ -33,9 +34,15 @@ public class MovementController {
 
     public void sprint(boolean pressed) {
         EntityPlayerSP player = mc.thePlayer;
-        if (mc.gameSettings != null) {
-            KeyBinding.setKeyBindState(mc.gameSettings.keyBindSprint.getKeyCode(), pressed);
+        if (mc.gameSettings == null) return;
+        // Humanization: sprint-reset pattern for combat
+        // Real players toggle sprint briefly before attacking
+        if (pressed && Humanizer.shouldToggleSprintOff()) {
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindSprint.getKeyCode(), false);
+            if (player != null) player.setSprinting(false);
+            return;
         }
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindSprint.getKeyCode(), pressed);
         if (player != null) player.setSprinting(pressed);
     }
 

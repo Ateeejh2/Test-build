@@ -13,6 +13,8 @@ import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.BlockPos;
 
+import com.atlasdead.wanderbot.humanization.Humanizer;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -226,6 +228,19 @@ public final class CombatPhaseController {
                 context.lastDecisionReason = "retarget-suppressed";
             }
             return TickResult.handled();
+        }
+
+        // Humanization: sprint toggle during combat approach
+        if (dist > 2.0D) {
+            boolean wantSprint = rotation.shouldSprint(self.isSprinting());
+            movement.sprint(wantSprint);
+        } else {
+            movement.sprint(false); // Stop sprinting at close range
+        }
+
+        // Humanization: random strafing during combat approach
+        if (dist > 1.5D && dist < 8.0D && Humanizer.shouldStrafe()) {
+            movement.sprint(false); // Stop sprint to strafe
         }
 
         // Execute via existing CombatExecutionController
@@ -462,18 +477,37 @@ public final class CombatPhaseController {
             return;
         }
 
+        // Humanization: occasional hesitation (skip attack)
+        if (Humanizer.shouldHesitate()) {
+            context.attackCooldown = Humanizer.range(1, 2);
+            context.canAttack = false;
+            return;
+        }
+
+        // Humanization: occasional miss (skip valid attack)
+        if (Humanizer.shouldMiss()) {
+            context.attackCooldown = Humanizer.attackDelayTicks();
+            context.canAttack = false;
+            return;
+        }
+
         // All conditions met: execute attack via standard click
         // This triggers the same client-side pipeline as a real player
         float yawError = angleToTarget(self, target);
         boolean visible = self.canEntityBeSeen(target);
 
-        if (distance <= WanderBotSettings.combatRange && visible && yawError <= 30F) {
+        if (distance <= WanderBotSettings.combatRange && visible && yawError <= 35F) {
+            // Humanization: apply slight aim error before attacking
+            float aimError = Humanizer.aimErrorDegrees();
+            self.rotationYaw += aimError;
+            self.rotationYawHead = self.rotationYaw;
+
             // Use existing movement controller for legitimate attack
             movement.attack(false);
             movement.clickAttack();
 
-            // 1.8.9 attack cooldown: roughly 6 ticks (300ms)
-            context.attackCooldown = 6;
+            // Humanization: variable attack cooldown (5-8 ticks)
+            context.attackCooldown = Humanizer.attackDelayTicks();
             context.canAttack = false;
         }
     }
@@ -482,7 +516,9 @@ public final class CombatPhaseController {
         if (target == null || target.isDead || target.getHealth() <= 0F) return false;
         if (distance > WanderBotSettings.combatRange) return false;
         float yawError = angleToTarget(self, target);
-        if (yawError > 30F) return false;
+        // Humanization: variable yaw tolerance (25-40 degrees)
+        float tolerance = Humanizer.attackYawTolerance();
+        if (yawError > tolerance) return false;
         if (!self.canEntityBeSeen(target)) return false;
         return self.onGround || distance < 2.5D;
     }

@@ -16,7 +16,7 @@ public final class WanderBotSettings {
     public static boolean navigationEnabled = true;
     public static boolean megastreakStrategy = true;
 
-    public static double combatRange = 3.35D;
+    public static double combatRange = 3.0D;
     public static double targetScanRange = 30.0D;
     public static double retreatHealth = 0.30D;
     public static int crowdThreshold = 3;
@@ -38,6 +38,18 @@ public final class WanderBotSettings {
     public static double bowMinHealth = 0.4D;
     public static int recoverDelay = 10;
     public static double threatThreshold = 80.0D;
+
+    // Humanization
+    public static boolean humanizationEnabled = true;
+    public static float aimErrorSD = 2.5F;
+    public static float rotationSpeedSD = 0.15F;
+    public static float overshootChance = 12.0F;
+    public static float distractionChance = 3.0F;
+    public static float attackHesitationChance = 8.0F;
+    public static float attackMissChance = 5.0F;
+    public static float sprintToggleChance = 6.0F;
+    public static float microPauseChance = 4.0F;
+    public static float strafeChance = 15.0F;
 
     private static Configuration config;
 
@@ -104,6 +116,7 @@ public final class WanderBotSettings {
         config.getCategory("combat").get("bowMinHealth").set(bowMinHealth);
         config.getCategory("combat").get("recoverDelay").set(recoverDelay);
         config.getCategory("combat").get("threatThreshold").set(threatThreshold);
+        config.getCategory("humanization").get("humanizationEnabled").set(humanizationEnabled);
         config.save();
     }
 
@@ -115,7 +128,7 @@ public final class WanderBotSettings {
         combatEnabled = true;
         navigationEnabled = true;
         megastreakStrategy = true;
-        combatRange = 3.35D;
+        combatRange = 3.0D;
         targetScanRange = 30.0D;
         retreatHealth = 0.30D;
         crowdThreshold = 3;
