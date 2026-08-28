@@ -23,11 +23,6 @@ minecraft {
     mappings = 'stable_22'
 }
 
-task runBenchmark(type: JavaExec) {
-    classpath = sourceSets.main.runtimeClasspath
-    main = 'com.atlasdead.wanderbot.benchmark.BenchmarkRunner'
-}
-
 processResources {
     inputs.property 'version', project.version
     inputs.property 'mcversion', project.minecraft.version
