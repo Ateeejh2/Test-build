@@ -17,7 +17,8 @@ public final class WanderBotSettings {
     public static boolean megastreakStrategy = true;
 
     public static double combatRange = 3.0D;
-    public static double targetScanRange = 30.0D;
+    /** Full loaded-player scan. The UI/config accepts this as a large practical maximum. */
+    public static double targetScanRange = 1000000.0D;
     public static double retreatHealth = 0.30D;
     public static int crowdThreshold = 3;
     public static int navRepathTicks = 8;
@@ -78,7 +79,10 @@ public final class WanderBotSettings {
         navigationEnabled = config.getBoolean("navigationEnabled", "bot", navigationEnabled, "Enable navigation controller.");
         megastreakStrategy = config.getBoolean("megastreakStrategy", "bot", megastreakStrategy, "Enable megastreak strategy weighting.");
         combatRange = config.getFloat("combatRange", "combat", (float) combatRange, 2.5F, 4.0F, "Preferred attack range.");
-        targetScanRange = config.getFloat("targetScanRange", "combat", (float) targetScanRange, 8.0F, 32.0F, "Target acquisition range.");
+        // Any configured value is treated as an unlimited loaded-player scan.
+        // This intentionally replaces the old 8..32 block-radius cap.
+        targetScanRange = config.getFloat("targetScanRange", "combat", (float) targetScanRange, 1.0F, 1000000.0F, "Target acquisition range; WanderBot scans all loaded players.");
+        targetScanRange = 1000000.0D;
         retreatHealth = config.getFloat("retreatHealth", "combat", (float) retreatHealth, 0.10F, 0.60F, "Self-health retreat threshold ratio.");
         crowdThreshold = config.getInt("crowdThreshold", "combat", crowdThreshold, 1, 8, "Nearby eligible players that count as crowd pressure.");
         navRepathTicks = config.getInt("navRepathTicks", "navigation", navRepathTicks, 2, 40, "Navigation replan cadence.");
@@ -163,7 +167,7 @@ public final class WanderBotSettings {
         navigationEnabled = true;
         megastreakStrategy = true;
         combatRange = 3.0D;
-        targetScanRange = 30.0D;
+        targetScanRange = 1000000.0D;
         retreatHealth = 0.30D;
         crowdThreshold = 3;
         navRepathTicks = 8;
@@ -189,7 +193,7 @@ public final class WanderBotSettings {
 
     public static void clamp() {
         combatRange = Math.max(2.5D, Math.min(4.0D, combatRange));
-        targetScanRange = Math.max(8.0D, Math.min(32.0D, targetScanRange));
+        targetScanRange = Math.max(1.0D, Math.min(1000000.0D, targetScanRange));
         retreatHealth = Math.max(0.10D, Math.min(0.60D, retreatHealth));
         crowdThreshold = Math.max(1, Math.min(8, crowdThreshold));
         navRepathTicks = Math.max(2, Math.min(40, navRepathTicks));
