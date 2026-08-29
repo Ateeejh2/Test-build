@@ -87,34 +87,41 @@ public class WanderBotMod {
      * By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
      * the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
      */
+    /**
+     * PlayerTickEvent fires for each entity tick. PRE fires before the entity
+     * processes its tick (and sends position packets). POST fires after.
+     * This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
+     */
     @SubscribeEvent
-    public void onClientTick(TickEvent.ClientTickEvent event) {
+    public void onPlayerTick(TickEvent.PlayerTickEvent event) {
         Minecraft mc = Minecraft.getMinecraft();
         if (BOT == null) return;
 
         if (event.phase == TickEvent.Phase.PRE) {
-            // KillAura rotation: PRE phase, BEFORE vanilla tick sends position packets.
-            // This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
+            // KillAura rotation: BEFORE vanilla tick sends position packets.
             // By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
             // the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
-            if (BOT.killAura != null && BOT.killAura.enabled && mc.thePlayer != null && mc.theWorld != null) {
+            if (BOT.killAura != null && BOT.killAura.enabled && event.player != null && mc.theWorld != null) {
                 net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
                 if (target != null) {
-                    BOT.killAura.tickPre(mc.thePlayer, target);
+                    BOT.killAura.tickPre((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
                 }
             }
         }
 
-        if (event.phase == TickEvent.Phase.END) {
-            // KillAura attack: POST phase, AFTER vanilla tick has sent packets
-            // Rotation was already sent by vanilla with correct values from tickPre
-            if (BOT.killAura != null && BOT.killAura.enabled && mc.thePlayer != null) {
+        if (event.phase == TickEvent.Phase.POST) {
+            // KillAura attack: AFTER vanilla tick has sent packets
+            if (BOT.killAura != null && BOT.killAura.enabled && event.player != null) {
                 net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
                 if (target != null) {
-                    BOT.killAura.tickPost(mc.thePlayer, target);
+                    BOT.killAura.tickPost((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
                 }
             }
-            BOT.tick();
         }
+    }
+
+    @SubscribeEvent
+    public void onClientTick(TickEvent.ClientTickEvent event) {
+        if (BOT != null) BOT.tick();
     }
 }
