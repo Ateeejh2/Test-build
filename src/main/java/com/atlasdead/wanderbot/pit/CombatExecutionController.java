@@ -210,19 +210,19 @@ public class CombatExecutionController {
         }
 
         // Compute the same combat path that PathRenderer displays before any
-        // rotation or movement decision is made.
-        lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+        // rotation or movement decision is made. Use a sufficiently large
+        // search budget so a valid route is not rejected merely because the
+        // target is more than a few blocks away.
+        lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 10000);
         Path combatPath = lastCombatPath;
 
         CombatStuckDetector.RecoveryAction stuckAction = combatStuck.update(self, now / 50L);
         if (stuckAction == CombatStuckDetector.RecoveryAction.FULL_REPLAN) {
             combatPathFinder.reset();
-            lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+            lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 10000);
             combatPath = lastCombatPath;
         }
 
-        // When KillAura is OFF, rotate toward the exact active rendered
-        // waypoint. When ON, never touch the player's rotation here.
         float yawError;
         float pitchError;
         if (killAuraActive) {
@@ -246,8 +246,6 @@ public class CombatExecutionController {
             else rotationAlignedTick = 0;
         }
 
-        // CombatSteering advances the same Path instance that is rendered,
-        // then computes movement from that active waypoint.
         CombatSteering.Result steer = combatSteering.compute(self, combatPath, distance);
 
         boolean inRange = distance <= 3.20D;
