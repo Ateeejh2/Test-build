@@ -4,7 +4,6 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemArmor;
 import net.minecraft.item.ItemStack;
-import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.BlockPos;
 import net.minecraft.util.MathHelper;
 import net.minecraft.world.World;
@@ -16,52 +15,46 @@ import java.util.List;
 /**
  * Target selection for the Pit combat layer.
  *
- * Hard eligibility rules:
- *  - at least one iron or chainmail armor piece
- *  - any diamond armor piece excludes the player
- *  - non-combat/invalid players are excluded
- *
- * Among eligible players, the nearest player is selected. CombatPathFinder
- * then owns locomotion toward that moving target and stops at attack range.
+ * Scans every player currently loaded by the client instead of limiting
+ * acquisition to a 30-block search box. Spawn players are never eligible.
  */
 public class TargetTracker {
-    private final TargetScanCache scanCache = new TargetScanCache();
+    private static final double SPAWN_MIN_X = -13.0D;
+    private static final double SPAWN_MAX_X = 16.0D;
+    private static final double SPAWN_MIN_Z = -14.0D;
+    private static final double SPAWN_MAX_Z = 19.0D;
+    private static final double SPAWN_MIN_Y = 110.0D;
+
     private EntityPlayer target;
     private double targetScore = Double.NEGATIVE_INFINITY;
     private ArmorProfile targetArmor = ArmorProfile.none();
 
-    public EntityPlayer findBest(final World world, final EntityPlayerSP self, final double maxRange, final PitZoneManager zones) {
+    public EntityPlayer findBest(final World world, final EntityPlayerSP self, final double maxRange,
+                                 final PitZoneManager zones) {
         return findBest(world, self, maxRange, zones, null);
     }
 
-    public EntityPlayer findBest(final World world, final EntityPlayerSP self, final double maxRange, final PitZoneManager zones, final StreakStrategyEngine strategy) {
+    public EntityPlayer findBest(final World world, final EntityPlayerSP self, final double maxRange,
+                                 final PitZoneManager zones, final StreakStrategyEngine strategy) {
         if (world == null || self == null) {
             clear();
             return null;
         }
 
-        final long nowMs = System.currentTimeMillis();
-        EntityPlayer cached = scanCache.get(world, self, maxRange, nowMs, 70L);
-        if (cached != null && isValidCandidate(cached, self)
-                && (zones == null || !zones.isPlayerProtected(cached))
-                && self.getDistanceToEntity(cached) <= maxRange) {
-            target = cached;
-            targetArmor = armorProfile(cached);
-            targetScore = score(world, self, cached, maxRange);
-            return cached;
+        List<EntityPlayer> candidates = new ArrayList<EntityPlayer>();
+        List<EntityPlayer> players = world.playerEntities;
+        if (players == null) {
+            clear();
+            return null;
         }
 
-        List<EntityPlayer> candidates = new ArrayList<EntityPlayer>();
-        AxisAlignedBB box = self.getEntityBoundingBox().expand(maxRange, maxRange, maxRange);
-        List<EntityPlayer> players = world.getEntitiesWithinAABB(EntityPlayer.class, box);
-
+        // The requested scan mode is the complete set of player entities currently
+        // known by the client. maxRange is retained for API compatibility.
         for (EntityPlayer candidate : players) {
             if (!isValidCandidate(candidate, self)) continue;
+            if (isInSpawn(candidate)) continue;
             if (zones != null && zones.isPlayerProtected(candidate)) continue;
             if (!isEligiblePitArmor(candidate)) continue;
-
-            double distance = self.getDistanceToEntity(candidate);
-            if (distance > maxRange) continue;
             candidates.add(candidate);
         }
 
@@ -70,7 +63,6 @@ public class TargetTracker {
             return null;
         }
 
-        // Primary selection rule: nearest eligible target.
         candidates.sort(new Comparator<EntityPlayer>() {
             @Override
             public int compare(EntityPlayer a, EntityPlayer b) {
@@ -82,8 +74,19 @@ public class TargetTracker {
         target = nearest;
         targetScore = score(world, self, nearest, maxRange);
         targetArmor = armorProfile(nearest);
-        scanCache.put(world, self, maxRange, nowMs, nearest);
         return nearest;
+    }
+
+    /** True when the player is inside the configured Pit spawn volume. */
+    public static boolean isInSpawn(EntityPlayer player) {
+        if (player == null) return false;
+        return isInSpawn(player.posX, player.posY, player.posZ);
+    }
+
+    public static boolean isInSpawn(double x, double y, double z) {
+        return x >= SPAWN_MIN_X && x <= SPAWN_MAX_X
+                && z >= SPAWN_MIN_Z && z <= SPAWN_MAX_Z
+                && y >= SPAWN_MIN_Y;
     }
 
     private boolean isValidCandidate(EntityPlayer candidate, EntityPlayerSP self) {
@@ -143,12 +146,13 @@ public class TargetTracker {
     private double score(World world, EntityPlayerSP self, EntityPlayer p, double maxRange) {
         ArmorProfile armor = armorProfile(p);
         double distance = self.getDistanceToEntity(p);
+        double scoreRange = Math.max(32.0D, Math.min(256.0D, distance + 1.0D));
         double health = MathHelper.clamp_float(p.getHealth(), 0.0F, p.getMaxHealth());
         double maxHealth = Math.max(1.0F, p.getMaxHealth());
         double healthRatio = health / maxHealth;
 
         double score = 0.0D;
-        score += 38.0D * (1.0D - clamp01(distance / Math.max(1.0D, maxRange)));
+        score += 38.0D * (1.0D - clamp01(distance / scoreRange));
         score += 26.0D * (1.0D - healthRatio);
         score += armor.chainPieces * 7.0D;
         score += armor.ironPieces * 4.0D;
@@ -167,14 +171,15 @@ public class TargetTracker {
 
     private int countEligiblePlayersNear(World world, EntityPlayerSP self, EntityPlayer targetPlayer, double radius) {
         if (world == null || targetPlayer == null) return 0;
-        AxisAlignedBB box = targetPlayer.getEntityBoundingBox().expand(radius, radius, radius);
-        List<EntityPlayer> nearby = world.getEntitiesWithinAABB(EntityPlayer.class, box);
+        List<EntityPlayer> players = world.playerEntities;
+        if (players == null) return 0;
         int count = 0;
-        for (EntityPlayer player : nearby) {
+        for (EntityPlayer player : players) {
             if (player == null || player == self || player == targetPlayer || player.isDead) continue;
             if (player.getHealth() <= 0.0F || player.isInvisible()) continue;
             if (player.capabilities != null && player.capabilities.isCreativeMode) continue;
-            if (isEligiblePitArmor(player)) count++;
+            if (isInSpawn(player)) continue;
+            if (isEligiblePitArmor(player) && player.getDistanceToEntity(targetPlayer) <= radius) count++;
         }
         return count;
     }
@@ -188,17 +193,17 @@ public class TargetTracker {
     public ArmorProfile getTargetArmor() { return targetArmor; }
 
     public void clear() {
-        scanCache.invalidate();
         target = null;
         targetScore = Double.NEGATIVE_INFINITY;
         targetArmor = ArmorProfile.none();
     }
 
+    /** Target remains viable at any loaded-player distance, but never in spawn. */
     public boolean isViable(EntityPlayerSP self, double maxRange) {
         return target != null
                 && isValidCandidate(target, self)
-                && isEligiblePitArmor(target)
-                && self.getDistanceToEntity(target) <= maxRange;
+                && !isInSpawn(target)
+                && isEligiblePitArmor(target);
     }
 
     public BlockPos targetFeet() {
