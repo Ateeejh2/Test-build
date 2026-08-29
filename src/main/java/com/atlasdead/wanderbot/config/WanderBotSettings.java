@@ -39,6 +39,17 @@ public final class WanderBotSettings {
     public static int recoverDelay = 10;
     public static double threatThreshold = 80.0D;
 
+    // KillAura settings (Myau pattern)
+    public static float killAuraAttackRange = 3.0F;
+    public static float killAuraSwingRange = 3.5F;
+    public static int killAuraMinCPS = 12;
+    public static int killAuraMaxCPS = 14;
+    public static int killAuraRotationMode = 2; // 0=NONE, 1=LEGIT, 2=SILENT, 3=LOCK_VIEW
+    public static int killAuraMoveFixMode = 1;   // 0=NONE, 1=SILENT, 2=STRICT
+    public static float killAuraSmoothing = 0.0F;
+    public static boolean killAuraThroughWalls = true;
+    public static int killAuraFOV = 360;
+
     // Humanization
     public static boolean forcePitMode = true;
     public static boolean humanizationEnabled = true;
@@ -86,6 +97,16 @@ public final class WanderBotSettings {
         recoverDelay = config.getInt("recoverDelay", "combat", recoverDelay, 3, 30, "Recovery delay ticks.");
         threatThreshold = config.getFloat("threatThreshold", "combat", (float) threatThreshold, 20.0F, 150.0F, "Threat score retreat threshold.");
         forcePitMode = true; // Always bypass PitMode for testing
+        // KillAura settings
+        killAuraAttackRange = config.getFloat("killAuraAttackRange", "killaura", killAuraAttackRange, 2.0F, 6.0F, "KillAura attack range.");
+        killAuraSwingRange = config.getFloat("killAuraSwingRange", "killaura", killAuraSwingRange, 2.0F, 6.0F, "KillAura swing range.");
+        killAuraMinCPS = config.getInt("killAuraMinCPS", "killaura", killAuraMinCPS, 1, 20, "KillAura minimum CPS.");
+        killAuraMaxCPS = config.getInt("killAuraMaxCPS", "killaura", killAuraMaxCPS, 1, 20, "KillAura maximum CPS.");
+        killAuraRotationMode = config.getInt("killAuraRotationMode", "killaura", killAuraRotationMode, 0, 3, "KillAura rotation mode.");
+        killAuraMoveFixMode = config.getInt("killAuraMoveFixMode", "killaura", killAuraMoveFixMode, 0, 2, "KillAura move fix mode.");
+        killAuraSmoothing = config.getFloat("killAuraSmoothing", "killaura", killAuraSmoothing, 0.0F, 1.0F, "KillAura rotation smoothing.");
+        killAuraThroughWalls = config.getBoolean("killAuraThroughWalls", "killaura", killAuraThroughWalls, "KillAura attack through walls.");
+        killAuraFOV = config.getInt("killAuraFOV", "killaura", killAuraFOV, 30, 360, "KillAura FOV limit.");
         if (config.hasChanged()) config.save();
     }
 
@@ -120,6 +141,16 @@ public final class WanderBotSettings {
         config.get("combat", "threatThreshold", (float) threatThreshold).set((float) threatThreshold);
         // forcePitMode is always true, do not persist
         config.get("humanization", "humanizationEnabled", humanizationEnabled).set(humanizationEnabled);
+        // KillAura settings
+        config.get("killaura", "killAuraAttackRange", killAuraAttackRange).set(killAuraAttackRange);
+        config.get("killaura", "killAuraSwingRange", killAuraSwingRange).set(killAuraSwingRange);
+        config.get("killaura", "killAuraMinCPS", killAuraMinCPS).set(killAuraMinCPS);
+        config.get("killaura", "killAuraMaxCPS", killAuraMaxCPS).set(killAuraMaxCPS);
+        config.get("killaura", "killAuraRotationMode", killAuraRotationMode).set(killAuraRotationMode);
+        config.get("killaura", "killAuraMoveFixMode", killAuraMoveFixMode).set(killAuraMoveFixMode);
+        config.get("killaura", "killAuraSmoothing", killAuraSmoothing).set(killAuraSmoothing);
+        config.get("killaura", "killAuraThroughWalls", killAuraThroughWalls).set(killAuraThroughWalls);
+        config.get("killaura", "killAuraFOV", killAuraFOV).set(killAuraFOV);
         config.save();
     }
 

@@ -83,6 +83,9 @@ public class CombatExecutionController {
     private CombatState combatState = CombatState.NO_TARGET;
     private CombatTarget currentTarget;
 
+    // KillAura module (Myau pattern)
+    private final KillAura killAura = new KillAura();
+
     /** Debug output for HUD: last computed local-space movement values. */
     public static String combatDebug = "";
 
@@ -118,6 +121,7 @@ public class CombatExecutionController {
         attackDelayMS = 0L;
         attackTimer = 0;
         jumpTimer = 0;
+        killAura.reset();
         targetLockUntil = 0L;
         rotationAlignedTick = 0;
         strafeSign = 1;
@@ -348,16 +352,20 @@ public class CombatExecutionController {
             combatState = CombatState.APPROACH;
         }
 
-        // Execute movement + attack based on state
-        if (combatState == CombatState.ATTACK_READY) {
-            executeAttack(self, target, distance, visible, yawError, pitchError, tacticalState, combatRoute);
-        } else {
-            executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
-        }
+        // Execute movement based on state
+        executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
 
         // Apply moveFix: align movement direction with combat rotation (Myau SILENT mode)
         if (combatState.drivesMovement()) {
             applyMoveFix(self, self.rotationYaw);
+        }
+
+        // KillAura attack: delegate to Myau-pattern module
+        if (combatState == CombatState.ATTACK_READY && !suppressAttack) {
+            killAura.enabled = true;
+            killAura.tick(self, target, now);
+        } else {
+            killAura.enabled = false;
         }
 
         CombatTelemetry previous = telemetry;
@@ -398,72 +406,7 @@ public class CombatExecutionController {
     public CombatState getCombatState() { return combatState; }
     public CombatTarget getCurrentTarget() { return currentTarget; }
 
-    private void executeAttack(EntityPlayerSP self, EntityPlayer target, double distance,
-                               boolean visible, float yawError, float pitchError,
-                               CombatTacticalModel.State tacticalState,
-                               CombatNavigationController.Result route) {
-        float strafe = tacticalState.strafeSign;
-        CombatTrackingModel.Snapshot tracked = tactical.getTrackingState();
-        if (tracked != null && tracked.reversal) strafe = -strafe;
-        if (tracked != null && tracked.suddenStop) strafe *= 0.75F;
-        boolean aligned = visible && yawError <= 16.0F && Math.abs(pitchError) <= 18.0F;
-        boolean tooClose = distance < tacticalState.preferredDistance - 0.45D;
-        boolean targetRetreating = tacticalState.targetRetreating;
-
-        // Convert world-space route to local-space for forward/backward
-        double localFwd = toLocalForward(self, route.x, route.z);
-        double localStr = toLocalStrafe(self, route.x, route.z);
-
-        // Distance-based movement: approach when far, hold when close
-        boolean moveForward = distance > tacticalState.preferredDistance + 0.15D;
-        if (tooClose) moveForward = false;
-        moveForward = moveForward && localFwd > -0.50D;
-        movement.forward(moveForward);
-
-        boolean moveBackward = tooClose && localFwd < -0.15D;
-        movement.backward(moveBackward);
-
-        double aggression = megastreakProfile == null ? 0.55D : megastreakProfile.targetAggression;
-        float strafeAmount = tooClose ? 0.65F : (targetRetreating ? 0.58F : (float)(0.35D + aggression * 0.20D));
-        float routeStrafe = (float)(localStr * 0.45D + strafe * strafeAmount);
-        movement.strafe(routeStrafe);
-
-        // Sprint when approaching from distance
-        boolean wantSprint = distance > tacticalState.preferredDistance
-                && self.onGround && localFwd > 0.3D;
-        movement.sprint(wantSprint);
-
-        // Combat jump: always check for obstacles
-        if (jumpTimer == 0 && self.onGround && shouldCombatJump(self, target, distance, tacticalState)) {
-            movement.jump();
-            jumpTimer = 8;
-        }
-
-        // Myau-style attack: ms-based delay + rayTrace check
-        if (attackDelayMS <= 0L && rotationAlignedTick >= ROTATION_MIN_DELAY) {
-            // RayTrace check: verify rotation points at target bounding box
-            boolean rayTraceHit = rayTraceToTarget(self, target, self.rotationYaw, self.rotationPitch);
-            if (rayTraceHit && aligned) {
-                // Send C06 (position+rotation) before attack
-                sendRotationPacket(self);
-
-                // Myau sequence: swingItem FIRST
-                mc.thePlayer.swingItem();
-
-                // Send attack packet (attackEntity handles sync internally)
-                mc.playerController.attackEntity(mc.thePlayer, target);
-
-                // Set next attack delay (Myau pattern: 1000/CPS)
-                attackDelayMS = getAttackDelayMS();
-                rotationAlignedTick = 0;
-                combatState = CombatState.COOLDOWN;
-            } else {
-                movement.attack(false);
-            }
-        } else {
-            movement.attack(false);
-        }
-    }
+    // executeAttack removed — delegated to KillAura module
 
     private void executeApproach(EntityPlayerSP self, EntityPlayer target, double distance,
                                  boolean visible, float yawError,
