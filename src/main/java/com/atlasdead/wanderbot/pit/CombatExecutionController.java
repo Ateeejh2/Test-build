@@ -159,13 +159,10 @@ public class CombatExecutionController {
     /**
      * Create a MovingObjectPosition pointing at the target entity.
      * Used to set mc.objectMouseOver before calling mc.clickMouse().
-     * MovingObjectPosition(Vec3, EnumFacing, Entity) is the entity hit constructor.
+     * MovingObjectPosition(Entity) creates an entity hit type MOP.
      */
     private static MovingObjectPosition createAttackMOP(EntityPlayerSP self, EntityPlayer target) {
-        double eyeY = self.posY + self.getEyeHeight();
-        Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
-        Vec3 targetPos = new Vec3(target.posX, target.posY + target.height * 0.5D, target.posZ);
-        return new MovingObjectPosition(targetPos, net.minecraft.util.EnumFacing.UP, target);
+        return new MovingObjectPosition(target);
     }
 
     // Reflection cache for accessing private Minecraft fields/methods
