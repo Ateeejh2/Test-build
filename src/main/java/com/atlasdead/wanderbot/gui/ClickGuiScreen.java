@@ -54,7 +54,7 @@ public class ClickGuiScreen extends GuiScreen {
             cycleInt(85,x,y+210,"MoveFix Mode",WanderBotSettings.killAuraMoveFixMode,0,2,()->WanderBotSettings.killAuraMoveFixMode);
             cycleDouble(86,x,y+252,"Smoothing",WanderBotSettings.killAuraSmoothing,0.05D,0.0D,1.0D,()->WanderBotSettings.killAuraSmoothing);
             toggle(87,x,y+294,"Through Walls",WanderBotSettings.killAuraThroughWalls,()->{WanderBotSettings.killAuraThroughWalls=!WanderBotSettings.killAuraThroughWalls; WanderBotSettings.save();});
-            cycleInt(88,x,y+336,"FOV",WanderBotSettings.killAuraFOV,10,30,360,()->WanderBotSettings.killAuraFOV);
+            cycleInt(88,x,y+336,"FOV",WanderBotSettings.killAuraFOV,30,360,()->WanderBotSettings.killAuraFOV);
             info(89,x,y+378,"Rotation: NONE/LEGIT/SILENT/LOCK_VIEW");
             info(90,x,y+400,"MoveFix: NONE/SILENT/STRICT");
         } else if(category==Category.NAVIGATION){

@@ -46,7 +46,7 @@ public final class WanderBotSettings {
     public static int killAuraMaxCPS = 14;
     public static int killAuraRotationMode = 2; // 0=NONE, 1=LEGIT, 2=SILENT, 3=LOCK_VIEW
     public static int killAuraMoveFixMode = 1;   // 0=NONE, 1=SILENT, 2=STRICT
-    public static float killAuraSmoothing = 0.0F;
+    public static double killAuraSmoothing = 0.0D;
     public static boolean killAuraThroughWalls = true;
     public static int killAuraFOV = 360;
 
@@ -104,7 +104,7 @@ public final class WanderBotSettings {
         killAuraMaxCPS = config.getInt("killAuraMaxCPS", "killaura", killAuraMaxCPS, 1, 20, "KillAura maximum CPS.");
         killAuraRotationMode = config.getInt("killAuraRotationMode", "killaura", killAuraRotationMode, 0, 3, "KillAura rotation mode.");
         killAuraMoveFixMode = config.getInt("killAuraMoveFixMode", "killaura", killAuraMoveFixMode, 0, 2, "KillAura move fix mode.");
-        killAuraSmoothing = config.getFloat("killAuraSmoothing", "killaura", killAuraSmoothing, 0.0F, 1.0F, "KillAura rotation smoothing.");
+        killAuraSmoothing = config.getFloat("killAuraSmoothing", "killaura", (float)killAuraSmoothing, 0.0F, 1.0F, "KillAura rotation smoothing.");
         killAuraThroughWalls = config.getBoolean("killAuraThroughWalls", "killaura", killAuraThroughWalls, "KillAura attack through walls.");
         killAuraFOV = config.getInt("killAuraFOV", "killaura", killAuraFOV, 30, 360, "KillAura FOV limit.");
         if (config.hasChanged()) config.save();
@@ -148,7 +148,7 @@ public final class WanderBotSettings {
         config.get("killaura", "killAuraMaxCPS", killAuraMaxCPS).set(killAuraMaxCPS);
         config.get("killaura", "killAuraRotationMode", killAuraRotationMode).set(killAuraRotationMode);
         config.get("killaura", "killAuraMoveFixMode", killAuraMoveFixMode).set(killAuraMoveFixMode);
-        config.get("killaura", "killAuraSmoothing", killAuraSmoothing).set(killAuraSmoothing);
+        config.get("killaura", "killAuraSmoothing", (float)killAuraSmoothing).set((float)killAuraSmoothing);
         config.get("killaura", "killAuraThroughWalls", killAuraThroughWalls).set(killAuraThroughWalls);
         config.get("killaura", "killAuraFOV", killAuraFOV).set(killAuraFOV);
         config.save();

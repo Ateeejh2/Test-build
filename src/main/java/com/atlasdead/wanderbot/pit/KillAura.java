@@ -76,7 +76,7 @@ public class KillAura {
         maxCPS = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMaxCPS;
         rotationMode = RotationMode.values()[com.atlasdead.wanderbot.config.WanderBotSettings.killAuraRotationMode];
         moveFixMode = MoveFixMode.values()[com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMoveFixMode];
-        smoothing = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSmoothing;
+        smoothing = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSmoothing;
         throughWalls = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraThroughWalls;
         fov = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraFOV;
     }
