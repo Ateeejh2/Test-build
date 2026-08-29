@@ -8,7 +8,10 @@ import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.MovingObjectPosition;
+import net.minecraft.util.Vec3;
 
 /**
  * Executes ordinary client-side movement/attack input for the Pit combat layer.
@@ -52,6 +55,8 @@ public class CombatExecutionController {
     private final MovementController movement;
     private final RotationController rotation;
     private final AimController aimController;
+    /** Myau-style millisecond-based attack delay. */
+    private long attackDelayMS = 0L;
     private int attackTimer;
     private int jumpTimer;
     private long targetLockUntil;
@@ -110,6 +115,7 @@ public class CombatExecutionController {
     }
 
     public void reset() {
+        attackDelayMS = 0L;
         attackTimer = 0;
         jumpTimer = 0;
         targetLockUntil = 0L;
@@ -177,6 +183,56 @@ public class CombatExecutionController {
         }
     }
 
+    /**
+     * Get attack delay in milliseconds (Myau pattern: 1000 / randomCPS).
+     * CPS range: 12-14 like Myau default.
+     */
+    private long getAttackDelayMS() {
+        int cps = 12 + new java.util.Random().nextInt(3); // 12-14 CPS like Myau
+        return 1000L / cps;
+    }
+
+    /**
+     * Myau-style rayTrace: verify that current rotation actually points
+     * at the target's bounding box before sending attack packet.
+     * Uses the same approach as Myau's RotationUtil.rayTrace(box, yaw, pitch, range).
+     */
+    private boolean rayTraceToTarget(EntityPlayerSP self, EntityPlayer target, float yaw, float pitch) {
+        double borderSize = target.getCollisionBorderSize();
+        AxisAlignedBB box = target.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
+        // Calculate eye position
+        double eyeY = self.posY + self.getEyeHeight();
+        Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
+        // Calculate look vector from yaw/pitch
+        float yawRad = (float) Math.toRadians(yaw);
+        float pitchRad = (float) Math.toRadians(pitch);
+        float lookX = (float)(-Math.sin(yawRad) * Math.cos(pitchRad));
+        float lookY = (float)(-Math.sin(pitchRad));
+        float lookZ = (float)(Math.cos(yawRad) * Math.cos(pitchRad));
+        double attackRange = 3.0D;
+        Vec3 targetPos = eyePos.addVector(lookX * attackRange, lookY * attackRange, lookZ * attackRange);
+        MovingObjectPosition mop = box.calculateIntercept(eyePos, targetPos);
+        return mop != null;
+    }
+
+    /**
+     * Fix movement direction to align with rotation (Myau moveFix SILENT mode).
+     * When the player is pressing forward, reorient the movement vector to
+     * match the current rotationYaw instead of the vanilla look direction.
+     */
+    private void applyMoveFix(EntityPlayerSP self, float combatYaw) {
+        if (!mc.gameSettings.keyBindForward.isKeyDown()) return;
+        // Calculate the angle between current yaw and combat yaw
+        float yawDiff = MathHelper.wrapAngleTo180_float(combatYaw - self.rotationYaw);
+        if (Math.abs(yawDiff) < 1.0F) return; // No fix needed
+        // Adjust motionX/motionZ to align with combat yaw
+        double speed = Math.sqrt(self.motionX * self.motionX + self.motionZ * self.motionZ);
+        if (speed < 0.001D) return;
+        double yawRad = Math.toRadians(combatYaw);
+        self.motionX = -Math.sin(yawRad) * speed;
+        self.motionZ = Math.cos(yawRad) * speed;
+    }
+
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
         if (self == null || target == null || action == null) {
             movement.release();
@@ -186,6 +242,10 @@ public class CombatExecutionController {
             return publishState(new State("IDLE", 0.0D, 180.0F, 90.0F, false, false));
         }
 
+        // Myau-style ms-based attack delay
+        if (attackDelayMS > 0L) {
+            attackDelayMS -= 50L; // One tick = 50ms
+        }
         if (attackTimer > 0) attackTimer--;
         if (jumpTimer > 0) jumpTimer--;
 
@@ -295,6 +355,11 @@ public class CombatExecutionController {
             executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
         }
 
+        // Apply moveFix: align movement direction with combat rotation (Myau SILENT mode)
+        if (combatState.drivesMovement()) {
+            applyMoveFix(self, self.rotationYaw);
+        }
+
         CombatTelemetry previous = telemetry;
         telemetry = new CombatTelemetry(
                 action == CombatDecisionEngine.Action.ATTACK ? CombatStateMachine.Phase.ENGAGE : CombatStateMachine.Phase.APPROACH,
@@ -374,24 +439,30 @@ public class CombatExecutionController {
             jumpTimer = 8;
         }
 
-        if (attackTimer == 0 && rotationAlignedTick >= ROTATION_MIN_DELAY) {
-            // Lock rotation
-            float savedYaw = self.rotationYaw;
-            float savedPitch = self.rotationPitch;
-            self.rotationYaw = savedYaw;
-            self.rotationPitch = savedPitch;
+        // Myau-style attack: ms-based delay + rayTrace check
+        if (attackDelayMS <= 0L && rotationAlignedTick >= ROTATION_MIN_DELAY) {
+            // RayTrace check: verify rotation points at target bounding box
+            boolean rayTraceHit = rayTraceToTarget(self, target, self.rotationYaw, self.rotationPitch);
+            if (rayTraceHit && aligned) {
+                // Send C06 (position+rotation) before attack
+                sendRotationPacket(self);
 
-            // Send C06 (position+rotation)
-            sendRotationPacket(self);
+                // Myau sequence: swingItem FIRST
+                mc.thePlayer.swingItem();
 
-            // Swing BEFORE attack (Vulcan Type 7)
-            mc.thePlayer.swingItem();
-            // Attack packet
-            mc.playerController.attackEntity(mc.thePlayer, target);
+                // Sync current play item
+                mc.playerController.syncCurrentPlayItem();
 
-            attackTimer = targetRetreating ? 5 : 6;
-            rotationAlignedTick = 0;
-            combatState = CombatState.COOLDOWN;
+                // Send attack packet directly (like Myau's PacketUtil.sendPacket)
+                mc.playerController.attackEntity(mc.thePlayer, target);
+
+                // Set next attack delay (Myau pattern: 1000/CPS)
+                attackDelayMS = getAttackDelayMS();
+                rotationAlignedTick = 0;
+                combatState = CombatState.COOLDOWN;
+            } else {
+                movement.attack(false);
+            }
         } else {
             movement.attack(false);
         }
