@@ -159,16 +159,36 @@ public class KillAura {
         // Set next attack delay
         attackDelayMS += getAttackDelay();
 
-        // Swing FIRST (Myau: mc.thePlayer.func_71038_i())
+        // 1. Swing FIRST (Myau: mc.thePlayer.func_71038_i())
         mc.thePlayer.swingItem();
 
-        // RayTrace check: verify rotation points at target bounding box
+        // 2. RayTrace check: verify rotation points at target bounding box
         if (!rayTraceToBox(self, target.getBox(), yaw, pitch)) {
             return false;
         }
 
-        // Attack packet
-        mc.playerController.attackEntity(mc.thePlayer, target.getEntity());
+        // 3. Sync current play item (Myau: callSyncCurrentPlayItem via accessor)
+        try {
+            java.lang.reflect.Method syncMethod = mc.playerController.getClass()
+                    .getDeclaredMethod("syncCurrentPlayItem");
+            syncMethod.setAccessible(true);
+            syncMethod.invoke(mc.playerController);
+        } catch (Exception ignored) {}
+
+        // 4. Send attack packet DIRECTLY via NetworkManager (Myau: PacketUtil.sendPacket)
+        //    NOT through mc.playerController.attackEntity() which queues through PlayerControllerMP
+        try {
+            net.minecraft.entity.Entity entityTarget = target.getEntity();
+            net.minecraft.network.play.client.C02PacketUseEntity attackPacket =
+                    new net.minecraft.network.play.client.C02PacketUseEntity(
+                            entityTarget,
+                            net.minecraft.network.play.client.C02PacketUseEntity.Action.ATTACK);
+            // Send directly to NetworkManager channel (bypasses packet queue)
+            mc.thePlayer.sendQueue.getNetworkManager().sendPacket(attackPacket);
+        } catch (Exception e) {
+            // Fallback: use playerController if direct send fails
+            mc.playerController.attackEntity(mc.thePlayer, target.getEntity());
+        }
 
         hitRegistered = true;
         return true;
