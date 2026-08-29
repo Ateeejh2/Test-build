@@ -2,17 +2,13 @@ package com.atlasdead.wanderbot.pit;
 
 import com.atlasdead.wanderbot.bot.MovementController;
 import com.atlasdead.wanderbot.rotation.RotationController;
-import com.atlasdead.wanderbot.rotation.AimController;
 import com.atlasdead.wanderbot.navigation.LocalAvoidanceController;
 import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.BlockPos;
-import net.minecraft.util.MovingObjectPosition;
-import net.minecraft.util.Vec3;
 
 /**
  * Executes ordinary client-side movement/attack input for the Pit combat layer.
@@ -55,7 +51,6 @@ public class CombatExecutionController {
     private final Minecraft mc;
     private final MovementController movement;
     private final RotationController rotation;
-    private final AimController aimController;
     /** Myau-style millisecond-based attack delay. */
     private long attackDelayMS = 0L;
     private int attackTimer;
@@ -93,7 +88,6 @@ public class CombatExecutionController {
         this.mc = mc;
         this.movement = movement;
         this.rotation = rotation;
-        this.aimController = new AimController(rotation);
         this.combatCoordinator = new CombatNavigationCoordinator(mc, new TerrainAnalyzer(), new LocalAvoidanceController());
         this.control = new CombatControlModel(mc, null, null);
     }
@@ -103,7 +97,6 @@ public class CombatExecutionController {
         this.mc = mc;
         this.movement = movement;
         this.rotation = rotation;
-        this.aimController = new AimController(rotation);
         this.combatCoordinator = new CombatNavigationCoordinator(mc, new TerrainAnalyzer(), new LocalAvoidanceController());
         this.control = new CombatControlModel(mc, zones, targets);
     }
@@ -130,7 +123,6 @@ public class CombatExecutionController {
         combatCoordinator.reset();
         telemetry = CombatTelemetry.idle();
         feedback.reset();
-        aimController.reset();
         megastreakProfile = null;
         combatState = CombatState.NO_TARGET;
         currentTarget = null;
@@ -157,111 +149,15 @@ public class CombatExecutionController {
     }
 
     /**
-     * Create a MovingObjectPosition pointing at the target entity.
-     * Used to set mc.objectMouseOver before calling mc.clickMouse().
-     * MovingObjectPosition(Entity) creates an entity hit type MOP.
+     * Compute horizontal yaw error to target WITHOUT setting rotation.
+     * KillAura handles rotation; this is only for movement decisions.
      */
-    private static MovingObjectPosition createAttackMOP(EntityPlayerSP self, EntityPlayer target) {
-        return new MovingObjectPosition(target);
-    }
-
-    // Reflection cache for accessing private Minecraft fields/methods
-    private static java.lang.reflect.Field rightClickDelayField;
-    private static java.lang.reflect.Method clickMouseMethod;
-    private static boolean reflectionInitialized = false;
-
-    private static void initReflection() {
-        if (reflectionInitialized) return;
-        reflectionInitialized = true;
-        try {
-            rightClickDelayField = Minecraft.class.getDeclaredField("rightClickDelayTimer");
-            rightClickDelayField.setAccessible(true);
-        } catch (Exception e) {
-            // Try SRG name
-            try {
-                rightClickDelayField = Minecraft.class.getDeclaredField("field_71429_W");
-                rightClickDelayField.setAccessible(true);
-            } catch (Exception ignored) {}
-        }
-        try {
-            clickMouseMethod = Minecraft.class.getDeclaredMethod("clickMouse");
-            clickMouseMethod.setAccessible(true);
-        } catch (Exception e) {
-            // Try SRG name
-            try {
-                clickMouseMethod = Minecraft.class.getDeclaredMethod("func_147116_af");
-                clickMouseMethod.setAccessible(true);
-            } catch (Exception ignored) {}
-        }
-    }
-
-    /** Set rightClickDelayTimer to 0 via reflection so clickMouse() fires. */
-    private static void resetClickDelay(Minecraft mc) {
-        try {
-            initReflection();
-            if (rightClickDelayField != null) {
-                rightClickDelayField.setInt(mc, 0);
-            }
-        } catch (Exception ignored) {}
-    }
-
-    /** Call mc.clickMouse() via reflection. */
-    private static void invokeClickMouse(Minecraft mc) {
-        try {
-            initReflection();
-            if (clickMouseMethod != null) {
-                clickMouseMethod.invoke(mc);
-            }
-        } catch (Exception ignored) {}
-    }
-
-
-    /**
-     * Get attack delay in milliseconds (Myau pattern: 1000 / randomCPS).
-     * CPS range: 12-14 like Myau default.
-     */
-    private long getAttackDelayMS() {
-        int cps = 12 + new java.util.Random().nextInt(3); // 12-14 CPS like Myau
-        return 1000L / cps;
-    }
-
-    /**
-     * Myau-style rayTrace: verify that current rotation actually points
-     * at the target's bounding box before sending attack packet.
-     * Uses the same approach as Myau's RotationUtil.rayTrace(box, yaw, pitch, range).
-     */
-    private boolean rayTraceToTarget(EntityPlayerSP self, EntityPlayer target, float yaw, float pitch) {
-        double borderSize = target.getCollisionBorderSize();
-        AxisAlignedBB box = target.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
-        // Calculate eye position
-        double eyeY = self.posY + self.getEyeHeight();
-        Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
-        // Calculate look vector from yaw/pitch
-        float yawRad = (float) Math.toRadians(yaw);
-        float pitchRad = (float) Math.toRadians(pitch);
-        float lookX = (float)(-Math.sin(yawRad) * Math.cos(pitchRad));
-        float lookY = (float)(-Math.sin(pitchRad));
-        float lookZ = (float)(Math.cos(yawRad) * Math.cos(pitchRad));
-        double attackRange = 3.0D;
-        Vec3 targetPos = eyePos.addVector(lookX * attackRange, lookY * attackRange, lookZ * attackRange);
-        MovingObjectPosition mop = box.calculateIntercept(eyePos, targetPos);
-        return mop != null;
-    }
-
-    /**
-     * Fix movement direction to align with rotation (Myau moveFix SILENT mode).
-     * Reorients motionX/motionZ to match combatYaw regardless of which keys
-     * are pressed — the bot controls movement via KeyBinding state, not
-     * physical key presses, so we cannot rely on isKeyDown().
-     */
-    private void applyMoveFix(EntityPlayerSP self, float combatYaw) {
-        float yawDiff = MathHelper.wrapAngleTo180_float(combatYaw - self.rotationYaw);
-        if (Math.abs(yawDiff) < 1.0F) return;
-        double speed = Math.sqrt(self.motionX * self.motionX + self.motionZ * self.motionZ);
-        if (speed < 0.001D) return;
-        double yawRad = Math.toRadians(combatYaw);
-        self.motionX = -Math.sin(yawRad) * speed;
-        self.motionZ = Math.cos(yawRad) * speed;
+    private static float computeYawError(EntityPlayerSP self, EntityPlayer target) {
+        double dx = target.posX - self.posX;
+        double dz = target.posZ - self.posZ;
+        if (dx * dx + dz * dz < 1.0E-8D) return 0.0F;
+        float desired = (float) (Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
+        return Math.abs(MathHelper.wrapAngleTo180_float(desired - self.rotationYaw));
     }
 
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
@@ -339,17 +235,15 @@ public class CombatExecutionController {
         }
 
         CombatTrackingModel.Snapshot tracking = tactical.getTrackingState();
-        AimController.Result aim = aimController.update(self, target, tracking, distance, visible,
-                action == CombatDecisionEngine.Action.ATTACK || action == CombatDecisionEngine.Action.APPROACH);
-        float yawError = aim.yawError;
-        float pitchError = aim.pitchError;
 
-        // Track rotation alignment timing for anti-cheat compliance.
-        if (aim.aligned) {
-            rotationAlignedTick++;
-        } else {
-            rotationAlignedTick = 0;
-        }
+        // Compute yaw/pitch error WITHOUT setting rotation.
+        // KillAura (Myau) handles rotation and attack.
+        // We only need yawError for movement decisions.
+        float yawError = computeYawError(self, target);
+        float pitchError = 0.0F;
+
+        // KillAura handles alignment — always treat as aligned for movement
+        rotationAlignedTick = 10;
 
         CombatNavigationController.Result combatRoute = combatNavigation.compute(
                 mc.theWorld, self, target, tacticalState, distance);
@@ -380,33 +274,8 @@ public class CombatExecutionController {
         }
 
         // Execute movement based on state
+        // Movement only — KillAura (Myau) handles rotation and attack
         executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
-
-        // Apply moveFix: align movement direction with combat rotation (Myau SILENT mode)
-        if (combatState.drivesMovement()) {
-            applyMoveFix(self, self.rotationYaw);
-        }
-
-        // Direct attack: use mc.clickMouse() for vanilla-exact behavior.
-        // We set objectMouseOver to point at the target, then call clickMouse().
-        // clickMouse() handles C02, swing, damage calc, rightClickDelayTimer —
-        // everything a real player left-click does. Zero manual packets.
-        if (combatState == CombatState.ATTACK_READY && !suppressAttack
-                && attackTimer == 0 && attackDelayMS <= 0L) {
-            // Temporarily override objectMouseOver so clickMouse() targets the enemy
-            MovingObjectPosition savedMOP = mc.objectMouseOver;
-            try {
-                mc.objectMouseOver = createAttackMOP(self, target);
-                // Reset rightClickDelayTimer via reflection so clickMouse() fires
-                resetClickDelay(mc);
-                // Call clickMouse() via reflection — same pipeline as real mouse click
-                invokeClickMouse(mc);
-            } finally {
-                mc.objectMouseOver = savedMOP;
-            }
-            attackTimer = 8;
-            attackDelayMS = getAttackDelayMS();
-        }
 
         CombatTelemetry previous = telemetry;
         telemetry = new CombatTelemetry(
