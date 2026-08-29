@@ -162,20 +162,24 @@ public class KillAura {
             // ============================================================
             // MACRO-STYLE ATTACK — Simulate mouse click, not manual packets.
             //
-            // Instead of calling playerController.attackEntity() directly
-            // (which sends C02 manually), we call mc.clickMouse() which is
-            // vanilla's own left-click handler. This triggers the EXACT same
-            // code path as a real player pressing the mouse button:
+            // We manually set mc.objectMouseOver to point at the target,
+            // then call mc.clickMouse() which is vanilla's left-click handler.
+            // This triggers the EXACT same code path as a real player clicking:
             //
             //   mc.clickMouse()
+            //     → checks objectMouseOver.entityHit
             //     → swingItem()          (sets isSwinging = true)
             //     → attackEntity()       (sends C02 + client-side effects)
             //     → onUpdateWalkingPlayer() (sends C03 + C0A naturally)
             //
-            // Result: Vanilla handles ALL packet ordering and client-side
-            // effects. No manual packet injection needed.
-            // This is indistinguishable from a real player clicking.
+            // We must set objectMouseOver because tickPre() runs BEFORE
+            // vanilla's onUpdate(), so objectMouseOver still has last tick's value.
             // ============================================================
+
+            // Set objectMouseOver to point at the target entity
+            updateObjectMouseOver(targetEntity);
+
+            // Trigger vanilla's clickMouse() — handles swing + attack + packets
             clickMouse();
 
             // Set next attack delay (ms-based like Myau)
@@ -206,8 +210,25 @@ public class KillAura {
     // This avoids duplicate swing packets that trigger Vulcan detections.
 
     // ===================================================================
-    // MACRO HELPER — Simulate mouse click via reflection
+    // MACRO HELPERS — ObjectMouseOver + clickMouse via reflection
     // ===================================================================
+
+    /**
+     * Update mc.objectMouseOver to point at the target entity.
+     * This is necessary because tickPre() runs BEFORE vanilla's onUpdate(),
+     * so objectMouseOver still has last tick's value (might be null or wrong entity).
+     * We create a MovingObjectPosition that points at the target's bounding box center.
+     */
+    private void updateObjectMouseOver(EntityPlayer targetEntity) {
+        if (mc.objectMouseOver == null) mc.objectMouseOver = new net.minecraft.util.MovingObjectPosition(
+                new Vec3(targetEntity.posX, targetEntity.posY + targetEntity.getEyeHeight(), targetEntity.posZ),
+                0, // facing
+                new net.minecraft.util.BlockPos(targetEntity)
+        );
+        // Set entityHit so clickMouse() knows to attack this entity
+        mc.objectMouseOver.entityHit = targetEntity;
+        mc.objectMouseOver.typeOfHit = net.minecraft.util.MovingObjectPosition.MovingObjectType.ENTITY;
+    }
 
     /**
      * Simulate a left mouse click by calling mc.clickMouse() via reflection.
