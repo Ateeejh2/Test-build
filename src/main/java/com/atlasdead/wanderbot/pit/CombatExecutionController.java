@@ -88,11 +88,18 @@ public class CombatExecutionController {
     // Combat state machine
     private CombatState combatState = CombatState.NO_TARGET;
     private CombatTarget currentTarget;
+    /** Last combat path computed, exposed for rendering. */
+    private Path lastCombatPath;
+    /** When true, KillAura handles rotation (Myau). Combat skips rotation. */
+    private boolean killAuraActive;
 
 
 
     /** Debug output for HUD: last computed local-space movement values. */
     public static String combatDebug = "";
+
+    public void setKillAuraActive(boolean active) { this.killAuraActive = active; }
+    public Path getLastCombatPath() { return lastCombatPath; }
 
     public CombatExecutionController(Minecraft mc, MovementController movement, RotationController rotation) {
         this.mc = mc;
@@ -217,27 +224,38 @@ public class CombatExecutionController {
 
         CombatTrackingModel.Snapshot tracking = tactical.getTrackingState();
 
-        // Aim at target — this sets rotationYaw/pitch so movement works correctly.
-        // KillAura handles attack timing; we handle rotation for movement.
-        AimController.Result aim = aimController.update(self, target, tracking, distance, visible, true);
-        float yawError = aim.yawError;
-        float pitchError = aim.pitchError;
-
-        // Track rotation alignment for attack timing
-        if (aim.aligned) {
-            rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
+        // Rotation: KillAura (Myau) handles rotation when ON.
+        // When KillAura is OFF, we set rotation via AimController for movement.
+        float yawError;
+        float pitchError;
+        if (killAuraActive) {
+            // KillAura handles rotation — don't interfere.
+            // Compute yawError for movement decisions only (don't set rotation).
+            yawError = computeYawError(self, target);
+            pitchError = 0.0F;
+            rotationAlignedTick = 10; // KillAura is responsible for alignment
         } else {
-            rotationAlignedTick = 0;
+            // Aim at target — this sets rotationYaw/pitch so movement works correctly.
+            AimController.Result aim = aimController.update(self, target, tracking, distance, visible, true);
+            yawError = aim.yawError;
+            pitchError = aim.pitchError;
+            if (aim.aligned) {
+                rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
+            } else {
+                rotationAlignedTick = 0;
+            }
         }
 
         // === Combat Pathfinding: A*-based terrain-aware path to target ===
-        Path combatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+        lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+        Path combatPath = lastCombatPath;
         CombatStuckDetector.RecoveryAction stuckAction = combatStuck.update(self, now / 50L);
 
         // Handle stuck recovery
         if (stuckAction == CombatStuckDetector.RecoveryAction.FULL_REPLAN) {
             combatPathFinder.reset();
-            combatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+            lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+            combatPath = lastCombatPath;
         }
 
         // Compute steering from path
@@ -312,6 +330,18 @@ public class CombatExecutionController {
     public CombatTelemetry getTelemetry() { return telemetry; }
     public CombatNavigationCoordinator.Outcome getNavigationOutcome() { return combatCoordinator.getLastOutcome(); }
 
+
+    /**
+     * Compute horizontal yaw error to target WITHOUT setting rotation.
+     * Used when KillAura handles rotation (we only need error for movement).
+     */
+    private static float computeYawError(EntityPlayerSP self, EntityPlayer target) {
+        double dx = target.posX - self.posX;
+        double dz = target.posZ - self.posZ;
+        if (dx * dx + dz * dz < 1.0E-8D) return 0.0F;
+        float desired = (float) (Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
+        return Math.abs(MathHelper.wrapAngleTo180_float(desired - self.rotationYaw));
+    }
 
     private State state(EntityPlayerSP self, EntityPlayer target, String mode, boolean attacking) {
         double dx = target.posX - self.posX;

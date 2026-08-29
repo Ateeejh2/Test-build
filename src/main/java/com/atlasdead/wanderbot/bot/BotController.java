@@ -446,6 +446,7 @@ public class BotController {
             if (killAuraActive) {
                 sendKillAuraCommand(false);
                 killAuraActive = false;
+                combatExecutor.setKillAuraActive(false);
                 killAuraChatCooldown = 10; // 0.5s cooldown
             }
             return;
@@ -456,10 +457,12 @@ public class BotController {
         if (distance <= KILLAURA_RANGE && !killAuraActive) {
             sendKillAuraCommand(true);
             killAuraActive = true;
+            combatExecutor.setKillAuraActive(true);
             killAuraChatCooldown = 10;
         } else if (distance > KILLAURA_RANGE && killAuraActive) {
             sendKillAuraCommand(false);
             killAuraActive = false;
+            combatExecutor.setKillAuraActive(false);
             killAuraChatCooldown = 10;
         }
     }
@@ -476,10 +479,12 @@ public class BotController {
         if (killAuraActive) {
             sendKillAuraCommand(false);
             killAuraActive = false;
+            combatExecutor.setKillAuraActive(false);
         }
     }
 
     public com.atlasdead.wanderbot.pit.CombatExecutionController getCombatExecutor() { return combatExecutor; }
+    public boolean isKillAuraActive() { return killAuraActive; }
 
     private boolean handleApproachTarget(EntityPlayerSP player, EntityPlayer target) {
         if (target == null || target.isDead || target.getHealth() <= 0.0F) return false;

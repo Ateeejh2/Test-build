@@ -40,6 +40,12 @@ public class PathRenderer {
             renderPath(path, px, py, pz);
             renderNodes(path, px, py, pz);
         }
+        // Render combat path (A*-based pathfinding to target)
+        com.atlasdead.wanderbot.pit.CombatExecutionController combatExec = bot.getCombatExecutor();
+        Path combatPath = combatExec != null ? combatExec.getLastCombatPath() : null;
+        if (WanderBotSettings.showPath && combatPath != null && !combatPath.getNodes().isEmpty()) {
+            renderCombatPath(combatPath, px, py, pz);
+        }
         if (WanderBotSettings.showTarget) renderTarget(bot, mc, event.partialTicks, px, py, pz);
         if (WanderBotSettings.showTargetGuide) renderTargetGuide(bot, mc, event.partialTicks, px, py, pz);
 
@@ -85,6 +91,45 @@ public class PathRenderer {
                     current ? 0.15F : (upcoming ? 1.0F : 0.5F),
                     current ? 1.0F : (upcoming ? 0.75F : 0.5F),
                     current ? 1.0F : 0.2F,
+                    current ? 1.0F : 0.82F);
+        }
+    }
+
+    private void renderCombatPath(Path path, double px, double py, double pz) {
+        java.util.List<PathNode> nodes = path.getNodes();
+        if (nodes.size() < 2) return;
+
+        Tessellator tess = Tessellator.getInstance();
+        WorldRenderer wr = tess.getWorldRenderer();
+        // Draw lines between nodes (orange/red for combat)
+        wr.begin(GL11.GL_LINES, DefaultVertexFormats.POSITION_COLOR);
+        int currentIndex = Math.max(0, Math.min(path.getIndex(), nodes.size() - 1));
+        for (int i = 0; i < nodes.size() - 1; i++) {
+            PathNode a = nodes.get(i);
+            PathNode b = nodes.get(i + 1);
+            boolean completed = i < currentIndex;
+            boolean next = i == currentIndex || i + 1 == currentIndex;
+            float r = completed ? 0.6F : (next ? 1.0F : 0.9F);
+            float g = completed ? 0.25F : (next ? 0.4F : 0.2F);
+            float bl = completed ? 0.15F : (next ? 0.1F : 0.1F);
+            float alpha = completed ? 0.4F : 1.0F;
+            wr.pos(a.x + 0.5D - px, a.y + 1.08D - py, a.z + 0.5D - pz)
+                    .color(r, g, bl, alpha).endVertex();
+            wr.pos(b.x + 0.5D - px, b.y + 1.08D - py, b.z + 0.5D - pz)
+                    .color(r, g, bl, alpha).endVertex();
+        }
+        tess.draw();
+
+        // Draw boxes at each node
+        for (int i = 0; i < nodes.size(); i++) {
+            PathNode n = nodes.get(i);
+            boolean current = i == path.getIndex();
+            boolean upcoming = i > path.getIndex();
+            float size = current ? 0.95F : (upcoming ? 0.55F : 0.38F);
+            drawBox(n.x + 0.5D - px, n.y + 1.01D - py, n.z + 0.5D - pz, size,
+                    current ? 1.0F : (upcoming ? 0.9F : 0.6F),
+                    current ? 0.4F : (upcoming ? 0.2F : 0.15F),
+                    current ? 0.1F : 0.1F,
                     current ? 1.0F : 0.82F);
         }
     }
