@@ -19,11 +19,9 @@ import net.minecraft.entity.player.EntityPlayer;
 /**
  * Main bot controller.
  *
- * After startup, CombatPathFinder is the single locomotion/pathfinding system:
- *   target acquisition -> nearest eligible target -> CombatPathFinder ->
- *   CombatSteering -> MovementController -> attack when in range.
- *
- * The old general navigation path is no longer used for active movement.
+ * After startup, CombatPathFinder is the single combat locomotion/pathfinding
+ * system. The legacy PathFinder remains intentionally available for the
+ * startup route that moves the player from the Pit entry position to mid.
  */
 public class BotController {
     private static final double KILLAURA_RANGE = 3.5D;
@@ -36,7 +34,7 @@ public class BotController {
     private final CombatPhaseController combatPhaseController;
     private final PitRuntimeGuard runtimeGuard = new PitRuntimeGuard();
 
-    /* Kept for the existing startup route only. Active locomotion uses CombatPathFinder. */
+    /* Startup route only. Active combat locomotion uses CombatPathFinder. */
     private final PathFinder startupPathFinder = new PathFinder();
     private final PitStartupSequence startupSequence;
 
@@ -99,7 +97,10 @@ public class BotController {
         if (!startupSequence.isComplete()) {
             startupSequence.tick(player);
             state = BotState.WALKING;
-            movement.release();
+            // IMPORTANT: do not release movement here.
+            // PitStartupSequence.followPath() has just populated the movement
+            // inputs for this tick; releasing them immediately cancels the
+            // first startup path step and makes the initial path appear dead.
             return;
         }
 
@@ -271,7 +272,7 @@ public class BotController {
     public CombatExecutionController getCombatExecutor() { return combatExecutor; }
     public boolean isKillAuraActive() { return killAuraActive; }
 
-    /** Active rendered path is now the CombatPathFinder path. */
+    /** Active rendered path is the CombatPathFinder path. */
     public Path getPath() {
         Path combatPath = combatExecutor.getLastCombatPath();
         return combatPath != null ? combatPath : null;
