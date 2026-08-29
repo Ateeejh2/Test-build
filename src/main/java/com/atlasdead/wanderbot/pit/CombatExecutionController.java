@@ -4,6 +4,10 @@ import com.atlasdead.wanderbot.bot.MovementController;
 import com.atlasdead.wanderbot.rotation.RotationController;
 import com.atlasdead.wanderbot.navigation.LocalAvoidanceController;
 import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
+import com.atlasdead.wanderbot.pathfinding.CombatPathFinder;
+import com.atlasdead.wanderbot.pathfinding.CombatSteering;
+import com.atlasdead.wanderbot.pathfinding.CombatStuckDetector;
+import com.atlasdead.wanderbot.pathfinding.Path;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
@@ -65,8 +69,11 @@ public class CombatExecutionController {
     private static final int ROTATION_MIN_DELAY = 2;
     private int rotationAlignedTick;
     private final CombatTacticalModel tactical = new CombatTacticalModel();
-    private final CombatNavigationController combatNavigation = new CombatNavigationController();
     private final CombatNavigationCoordinator combatCoordinator;
+    // Combat pathfinding
+    private final CombatPathFinder combatPathFinder = new CombatPathFinder();
+    private final CombatSteering combatSteering = new CombatSteering();
+    private final CombatStuckDetector combatStuck = new CombatStuckDetector();
     private final CombatStateMachine stateMachine = new CombatStateMachine();
     private CombatTelemetry telemetry = CombatTelemetry.idle();
     private State lastState = new State("IDLE", 0.0D, 180.0F, 90.0F, false, false);
@@ -130,24 +137,6 @@ public class CombatExecutionController {
 
     /**
      * Convert a world-space movement vector (routeX, routeZ) into the player's
-     * local forward/strafe components using the player's current rotationYaw.
-     *
-     * Minecraft 1.8.9 conventions:
-     *   yaw=0 → facing South (+Z)
-     *   yaw=90 → facing West (-X)
-     *   forward world vector = (-sin(yaw), cos(yaw))
-     *   right world vector   = ( cos(yaw), sin(yaw))
-     */
-    private static double toLocalForward(EntityPlayerSP self, double routeX, double routeZ) {
-        double yaw = Math.toRadians(self.rotationYaw);
-        return routeX * (-Math.sin(yaw)) + routeZ * Math.cos(yaw);
-    }
-
-    private static double toLocalStrafe(EntityPlayerSP self, double routeX, double routeZ) {
-        double yaw = Math.toRadians(self.rotationYaw);
-        return routeX * Math.cos(yaw) + routeZ * Math.sin(yaw);
-    }
-
     /**
      * Compute horizontal yaw error to target WITHOUT setting rotation.
      * KillAura handles rotation; this is only for movement decisions.
@@ -245,21 +234,25 @@ public class CombatExecutionController {
         // KillAura handles alignment — always treat as aligned for movement
         rotationAlignedTick = 10;
 
-        CombatNavigationController.Result combatRoute = combatNavigation.compute(
-                mc.theWorld, self, target, tacticalState, distance);
-        if (combatRoute.blocked) {
-            movement.release();
-            combatState = CombatState.APPROACH;
-            return publishState(state(self, target, "COMBAT_ROUTE_BLOCKED", false));
+        // === Combat Pathfinding: A*-based terrain-aware path to target ===
+        Path combatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
+        CombatStuckDetector.RecoveryAction stuckAction = combatStuck.update(self, now / 50L);
+
+        // Handle stuck recovery
+        if (stuckAction == CombatStuckDetector.RecoveryAction.FULL_REPLAN) {
+            combatPathFinder.reset();
+            combatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
         }
 
+        // Compute steering from path
+        CombatSteering.Result steer = combatSteering.compute(self, combatPath, distance);
+
         // State machine transitions
-        boolean aligned = visible && yawError <= 16.0F && Math.abs(pitchError) <= 18.0F;
         boolean inRange = distance <= 3.20D;
         boolean canAttackNow = action == CombatDecisionEngine.Action.ATTACK
                 && controlDecision.allowAttack && !suppressAttack;
 
-        if (inRange && aligned && rotationAlignedTick >= ROTATION_MIN_DELAY) {
+        if (inRange && rotationAlignedTick >= ROTATION_MIN_DELAY) {
             if (attackTimer == 0 && canAttackNow) {
                 combatState = CombatState.ATTACK_READY;
             } else if (attackTimer > 0) {
@@ -267,15 +260,20 @@ public class CombatExecutionController {
             } else {
                 combatState = CombatState.AIM;
             }
-        } else if (aligned) {
-            combatState = CombatState.AIM;
         } else {
             combatState = CombatState.APPROACH;
         }
 
-        // Execute movement based on state
-        // Movement only — KillAura (Myau) handles rotation and attack
-        executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
+        // Apply movement from CombatSteering
+        movement.forward(steer.forward);
+        movement.backward(steer.backward);
+        movement.strafe(steer.strafe);
+        movement.sprint(steer.sprint && self.onGround);
+        if (steer.jump && self.onGround && jumpTimer <= 0) {
+            movement.jump();
+            jumpTimer = 6;
+        }
+        movement.attack(false);  // KillAura handles attack
 
         CombatTelemetry previous = telemetry;
         telemetry = new CombatTelemetry(
@@ -285,16 +283,16 @@ public class CombatExecutionController {
                 .withFeedback(feedbackState.event.name(), feedbackState.selfHealth, feedbackState.targetHealth);
 
         // Build debug string
-        double localFwd = toLocalForward(self, combatRoute.x, combatRoute.z);
-        double localStr = toLocalStrafe(self, combatRoute.x, combatRoute.z);
-        combatDebug = String.format("State=%s T=%s D=%.1f Yaw=%.0f LF=%.2f LS=%.2f Sp=%s Jp=%s Atk=%d MR=%s",
+        int pathIdx = combatPath != null ? combatPath.getIndex() : 0;
+        int pathSize = combatPath != null ? combatPath.getNodes().size() : 0;
+        combatDebug = String.format("State=%s T=%s D=%.1f Path=%d/%d Stuck=%s Sprint=%s Jump=%s Atk=%d",
                 combatState.name(),
                 target != null ? target.getName() : "none",
-                distance, yawError, localFwd, localStr,
-                self.onGround ? "G" : "A",
-                jumpTimer > 0 ? "CD" + jumpTimer : "-",
-                attackTimer,
-                combatRoute.reason);
+                distance, pathIdx, pathSize,
+                stuckAction.name(),
+                steer.sprint ? "ON" : "OFF",
+                steer.jump ? "YES" : "no",
+                attackTimer);
 
         return publishState(new State(action.name(), distance, yawError, pitchError, visible,
                 combatState == CombatState.COOLDOWN,
@@ -314,90 +312,6 @@ public class CombatExecutionController {
 
     public CombatState getCombatState() { return combatState; }
     public CombatTarget getCurrentTarget() { return currentTarget; }
-
-    private void executeApproach(EntityPlayerSP self, EntityPlayer target, double distance,
-                                 boolean visible, float yawError,
-                                 CombatTacticalModel.State tacticalState,
-                                 CombatNavigationController.Result route) {
-        double localFwd = toLocalForward(self, route.x, route.z);
-        double localStr = toLocalStrafe(self, route.x, route.z);
-
-        float preferred = tacticalState.preferredDistance;
-        boolean tooClose = distance < preferred - 0.55D;
-        boolean tooFar = distance > preferred + 0.55D;
-
-        if (visible && distance < 5.0D) {
-            float strafe = tacticalState.strafeSign;
-            // FORWARD: target ahead, need to close distance
-            boolean wantForward = tooFar && localFwd > -0.50D;
-            // BACKWARD: target behind (overshot) and too close
-            boolean wantBackward = tooClose && localFwd < -0.15D;
-            movement.forward(wantForward);
-            movement.backward(wantBackward);
-            movement.strafe((float)(localStr * 0.60D + strafe * (tooClose ? 0.45F : 0.30F)));
-            // Sprint: approaching from distance with good alignment
-            movement.sprint(self.onGround && tooFar && localFwd > 0.3D);
-        } else {
-            // Not visible or far away: move toward target direction
-            boolean wantForward = localFwd > -0.50D;
-            boolean wantBackward = localFwd < -0.50D && distance < preferred;
-            movement.forward(wantForward);
-            movement.backward(wantBackward);
-            movement.strafe((float)(localStr * 0.55D));
-            movement.sprint(self.onGround && localFwd > 0.3D);
-        }
-        movement.attack(false);
-    }
-
-    private boolean shouldCombatJump(EntityPlayerSP self, EntityPlayer target, double distance,
-                                     CombatTacticalModel.State tacticalState) {
-        // Standard combat jump for maintaining melee spacing
-        boolean standardJump = distance > 2.0D && distance < 4.0D
-                && tacticalState.verticalDistance < 1.15D
-                && Math.abs(tacticalState.closingRate) < 2.8D;
-        if (standardJump) return true;
-
-        // Obstacle jump: block in the way toward target
-        double dx = target.posX - self.posX;
-        double dz = target.posZ - self.posZ;
-        double hLen = Math.sqrt(dx * dx + dz * dz);
-        if (hLen > 0.001D) {
-            // Check 1-2 blocks ahead in the target direction
-            for (double probe = 0.8D; probe <= 2.0D; probe += 0.6D) {
-                int bx = (int) Math.round(self.posX + (dx / hLen) * probe);
-                int bz = (int) Math.round(self.posZ + (dz / hLen) * probe);
-                net.minecraft.util.BlockPos probeFeet = new net.minecraft.util.BlockPos(bx, (int) self.posY, bz);
-                net.minecraft.util.BlockPos probeHead = probeFeet.up();
-                boolean blocked = !com.atlasdead.wanderbot.pathfinding.PathFinder.canOccupy(self.worldObj, probeFeet)
-                        || !com.atlasdead.wanderbot.pathfinding.PathFinder.canOccupy(self.worldObj, probeHead);
-                if (blocked) return true;
-            }
-        }
-
-        // Height difference jump: target is 1 block up
-        if (distance < 3.5D && self.onGround) {
-            double targetY = target.posY;
-            if (targetY > self.posY + 0.5D && targetY < self.posY + 1.5D) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private float chooseStrafe(EntityPlayerSP self, EntityPlayer target) {
-        long now = System.currentTimeMillis();
-        if (now >= targetLockUntil) {
-            double dx = target.posX - self.posX;
-            double dz = target.posZ - self.posZ;
-            double cross = self.motionX * dz - self.motionZ * dx;
-            if (Math.abs(cross) > 0.01D) strafeSign = cross > 0.0D ? -1 : 1;
-            else if (((now / 900L) & 1L) == 0L) strafeSign = 1;
-            else strafeSign = -1;
-            targetLockUntil = now + 650L;
-        }
-        return strafeSign;
-    }
 
     public CombatTelemetry getTelemetry() { return telemetry; }
     public CombatNavigationCoordinator.Outcome getNavigationOutcome() { return combatCoordinator.getLastOutcome(); }
