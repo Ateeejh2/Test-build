@@ -75,8 +75,11 @@ public class MovementController {
         if (mc == null || mc.thePlayer == null || mc.playerController == null) return;
         if (target == null) return;
 
-        mc.playerController.attackEntity(mc.thePlayer, target);
+        // Send arm swing FIRST, then attack.
+        // Anti-cheat (Vulcan Type 7) checks that swing packet arrives
+        // before or with the attack packet. Queue order = send order.
         mc.thePlayer.swingItem();
+        mc.playerController.attackEntity(mc.thePlayer, target);
     }
 
     public void release() {
