@@ -83,8 +83,7 @@ public class CombatExecutionController {
     private CombatState combatState = CombatState.NO_TARGET;
     private CombatTarget currentTarget;
 
-    // KillAura module (Myau pattern)
-    private final KillAura killAura = new KillAura();
+
 
     /** Debug output for HUD: last computed local-space movement values. */
     public static String combatDebug = "";
@@ -121,7 +120,6 @@ public class CombatExecutionController {
         attackDelayMS = 0L;
         attackTimer = 0;
         jumpTimer = 0;
-        killAura.reset();
         targetLockUntil = 0L;
         rotationAlignedTick = 0;
         strafeSign = 1;
@@ -329,12 +327,12 @@ public class CombatExecutionController {
             applyMoveFix(self, self.rotationYaw);
         }
 
-        // KillAura attack: enabled/disabled here, actual tick via WanderBotMod events
-        // rotation = tickPre (PRE phase), attack = tickPost (END phase)
+        // Direct attack: set rotation + press attack button
+        // rotation is already set by aimController.update() above
+        // movement.attack(true) simulates a mouse click — vanilla handles packets
         if (combatState == CombatState.ATTACK_READY && !suppressAttack) {
-            killAura.enabled = true;
-        } else {
-            killAura.enabled = false;
+            movement.attack(true);
+            attackTimer = 8; // cooldown ticks before next attack
         }
 
         CombatTelemetry previous = telemetry;
@@ -463,7 +461,7 @@ public class CombatExecutionController {
 
     public CombatTelemetry getTelemetry() { return telemetry; }
     public CombatNavigationCoordinator.Outcome getNavigationOutcome() { return combatCoordinator.getLastOutcome(); }
-    public KillAura getKillAura() { return killAura; }
+
 
     private State state(EntityPlayerSP self, EntityPlayer target, String mode, boolean attacking) {
         double dx = target.posX - self.posX;

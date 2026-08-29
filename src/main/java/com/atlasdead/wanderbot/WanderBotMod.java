@@ -81,46 +81,9 @@ public class WanderBotMod {
         if (BOT != null) BOT.onDisconnect();
     }
 
-    /**
-     * KillAura rotation: PRE phase, BEFORE vanilla tick sends position packets.
-     * This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
-     * By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
-     * the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
-     */
-    /**
-     * PlayerTickEvent fires for each entity tick. PRE fires before the entity
-     * processes its tick (and sends position packets). POST fires after.
-     * This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
-     */
-    @SubscribeEvent
-    public void onPlayerTick(TickEvent.PlayerTickEvent event) {
-        Minecraft mc = Minecraft.getMinecraft();
-        if (BOT == null) return;
-
-        if (event.phase == TickEvent.Phase.START) {
-            // KillAura rotation: BEFORE vanilla tick sends position packets.
-            // By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
-            // the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
-            com.atlasdead.wanderbot.pit.KillAura killAura = BOT.getCombatExecutor().getKillAura();
-            if (killAura != null && killAura.enabled && event.player != null && mc.theWorld != null) {
-                net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
-                if (target != null) {
-                    killAura.tickPre((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
-                }
-            }
-        }
-
-        if (event.phase == TickEvent.Phase.END) {
-            // KillAura attack: AFTER vanilla tick has sent packets
-            com.atlasdead.wanderbot.pit.KillAura killAura = BOT.getCombatExecutor().getKillAura();
-            if (killAura != null && killAura.enabled && event.player != null) {
-                net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
-                if (target != null) {
-                    killAura.tickPost((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
-                }
-            }
-        }
-    }
+    // KillAura removed — attack is now handled directly by CombatExecutionController
+    // using movement.attack(true) which simulates a mouse click.
+    // No special PlayerTickEvent handling needed.
 
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {

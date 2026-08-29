@@ -417,18 +417,6 @@ public class BotController {
     public com.atlasdead.wanderbot.pit.CombatExecutionController getCombatExecutor() { return combatExecutor; }
 
     private void handleAttackWindow(EntityPlayerSP player, EntityPlayer target) {
-        // When KillAura is active, it handles rotation and attack via tickPre/tickPost
-        // so we skip the old handleAttackWindow logic to avoid packet conflicts
-        if (combatExecutor.getKillAura() != null && combatExecutor.getKillAura().isActive()) {
-            // KillAura manages its own attack timing and rotation
-            // Just stop navigation movement
-            movement.forward(false);
-            movement.strafe(0.0F);
-            movement.sprint(false);
-            path = null;
-            goal = null;
-            return;
-        }
         double distance = player.getDistanceToEntity(target);
         float yawError = rotation.tick(player, target.posX, target.posY + target.getEyeHeight() * 0.85D, target.posZ, 0.0F);
         movement.forward(false);
