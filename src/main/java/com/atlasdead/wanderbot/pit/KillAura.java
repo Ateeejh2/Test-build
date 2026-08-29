@@ -220,12 +220,15 @@ public class KillAura {
      * We create a MovingObjectPosition that points at the target's bounding box center.
      */
     private void updateObjectMouseOver(EntityPlayer targetEntity) {
-        if (mc.objectMouseOver == null) mc.objectMouseOver = new net.minecraft.util.MovingObjectPosition(
-                new Vec3(targetEntity.posX, targetEntity.posY + targetEntity.getEyeHeight(), targetEntity.posZ),
-                0, // facing
-                new net.minecraft.util.BlockPos(targetEntity)
+        // Create a MovingObjectPosition pointing at the target entity.
+        // clickMouse() checks objectMouseOver.entityHit to decide what to attack.
+        Vec3 targetVec = new Vec3(targetEntity.posX, targetEntity.posY + targetEntity.getEyeHeight(), targetEntity.posZ);
+        net.minecraft.util.BlockPos targetPos = new net.minecraft.util.BlockPos(targetEntity);
+        mc.objectMouseOver = new net.minecraft.util.MovingObjectPosition(
+                targetVec,
+                net.minecraft.util.EnumFacing.UP,
+                targetPos
         );
-        // Set entityHit so clickMouse() knows to attack this entity
         mc.objectMouseOver.entityHit = targetEntity;
         mc.objectMouseOver.typeOfHit = net.minecraft.util.MovingObjectPosition.MovingObjectType.ENTITY;
     }
