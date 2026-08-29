@@ -57,13 +57,15 @@ public final class PitDebugDashboard {
         line(font, "Path: " + pathInfo(bot), x, y += 11, muted);
         line(font, "Guard: " + bot.getRuntimeGuardStatus(), x, y += 11, c);
         com.atlasdead.wanderbot.pit.CombatExecutionController.State cs = bot.getPit().getCombatExecutor().getLastState();
+        com.atlasdead.wanderbot.pit.CombatState cState = bot.getPit().getCombatExecutor().getCombatState();
+        com.atlasdead.wanderbot.pit.CombatTarget cTarget = bot.getPit().getCombatExecutor().getCurrentTarget();
+        line(font, "CState: " + (cState != null ? cState.name() : "NONE") + "  Target: " + (cTarget != null ? cTarget : "none"), x, y += 11, 0xFFFFAA33);
         line(font, "Aim: yaw=" + f(cs.yawError) + " pitch=" + f(cs.pitchError) + " aligned=" + yesNo(cs.aligned), x, y += 11, muted);
         line(font, "Attack: range=" + yesNo(cs.inRange) + " allow=" + yesNo(cs.attackAllowed) + " timer=" + cs.attackTimer, x, y += 11, muted);
-        line(font, "Mouse LMB: " + yesNo(Mouse.isButtonDown(0)) + " KeyAttack: " + yesNo(mc.gameSettings.keyBindAttack.isKeyDown()), x, y += 11, muted);
         line(font, "Combat reason: " + compact(cs.decisionReason, 39), x, y += 11, muted);
         String cdbg = com.atlasdead.wanderbot.pit.CombatExecutionController.combatDebug;
         if (cdbg != null && !cdbg.isEmpty()) {
-            line(font, "Move: " + compact(cdbg, 55), x, y += 11, 0xFF00CCFF);
+            line(font, compact(cdbg, 55), x, y += 11, 0xFF00CCFF);
         }
     }
 
