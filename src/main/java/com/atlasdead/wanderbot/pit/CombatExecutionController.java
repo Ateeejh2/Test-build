@@ -8,16 +8,19 @@ import com.atlasdead.wanderbot.pathfinding.CombatPathFinder;
 import com.atlasdead.wanderbot.pathfinding.CombatSteering;
 import com.atlasdead.wanderbot.pathfinding.CombatStuckDetector;
 import com.atlasdead.wanderbot.pathfinding.Path;
+import com.atlasdead.wanderbot.pathfinding.PathNode;
 import com.atlasdead.wanderbot.rotation.AimController;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.MathHelper;
-import net.minecraft.util.BlockPos;
 
 /**
- * Executes ordinary client-side movement/attack input for the Pit combat layer.
- * The controller intentionally uses the same keybind path a normal player uses.
+ * Executes client-side movement for the Pit combat layer.
+ *
+ * Combat Path is authoritative for movement. When KillAura is OFF, rotation
+ * follows the same rendered combat waypoint. When KillAura is ON, rotation is
+ * left entirely to KillAura and only path movement inputs are generated here.
  */
 public class CombatExecutionController {
     public static final class State {
@@ -56,24 +59,17 @@ public class CombatExecutionController {
     private final Minecraft mc;
     private final MovementController movement;
     private final RotationController rotation;
-    /** Myau-style millisecond-based attack delay. */
     private long attackDelayMS = 0L;
     private int attackTimer;
     private int jumpTimer;
     private long targetLockUntil;
     private int strafeSign = 1;
-    /**
-     * Minimum ticks that rotation must be aligned before an attack is sent.
-     * This ensures the rotation packet reaches the server before the attack
-     * packet, preventing Vulcan Bad Packets Type 7 / Type H detections.
-     */
     private static final int ROTATION_MIN_DELAY = 2;
     private int rotationAlignedTick;
     private final CombatTacticalModel tactical = new CombatTacticalModel();
     private final CombatNavigationCoordinator combatCoordinator;
     private final CombatNavigationController combatNavigation = new CombatNavigationController();
-    private AimController aimController;
-    // Combat pathfinding
+    private final AimController aimController;
     private final CombatPathFinder combatPathFinder = new CombatPathFinder();
     private final CombatSteering combatSteering = new CombatSteering();
     private final CombatStuckDetector combatStuck = new CombatStuckDetector();
@@ -85,17 +81,11 @@ public class CombatExecutionController {
     private MegastreakProfileEngine.Profile megastreakProfile;
     private CombatControlModel control;
 
-    // Combat state machine
     private CombatState combatState = CombatState.NO_TARGET;
     private CombatTarget currentTarget;
-    /** Last combat path computed, exposed for rendering. */
     private Path lastCombatPath;
-    /** When true, KillAura handles rotation (Myau). Combat skips rotation. */
     private boolean killAuraActive;
 
-
-
-    /** Debug output for HUD: last computed local-space movement values. */
     public static String combatDebug = "";
 
     public void setKillAuraActive(boolean active) { this.killAuraActive = active; }
@@ -146,6 +136,7 @@ public class CombatExecutionController {
         megastreakProfile = null;
         combatState = CombatState.NO_TARGET;
         currentTarget = null;
+        lastCombatPath = null;
     }
 
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
@@ -154,13 +145,11 @@ public class CombatExecutionController {
             combatDebug = "";
             combatState = CombatState.NO_TARGET;
             currentTarget = null;
+            lastCombatPath = null;
             return publishState(new State("IDLE", 0.0D, 180.0F, 90.0F, false, false));
         }
 
-        // Myau-style ms-based attack delay
-        if (attackDelayMS > 0L) {
-            attackDelayMS -= 50L; // One tick = 50ms
-        }
+        if (attackDelayMS > 0L) attackDelayMS -= 50L;
         if (attackTimer > 0) attackTimer--;
         if (jumpTimer > 0) jumpTimer--;
 
@@ -169,15 +158,14 @@ public class CombatExecutionController {
             movement.release();
             combatState = CombatState.NO_TARGET;
             currentTarget = null;
+            lastCombatPath = null;
             return publishState(state(self, target, "RESET", false));
         }
 
-        // Maintain or create CombatTarget snapshot
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.getEntity() != target) {
             currentTarget = new CombatTarget(target, now / 50L);
             combatState = CombatState.ACQUIRE_TARGET;
         } else {
-            // Refresh snapshot each tick while target is held
             currentTarget = currentTarget.refresh(now / 50L);
         }
 
@@ -205,7 +193,6 @@ public class CombatExecutionController {
             return publishState(state(self, target, threats.crossfire ? "CROSSFIRE_REASSESS" : "SURROUNDED_REASSESS", false));
         }
 
-        // REASSESS: suppress attack only, NOT movement — keep approaching/tracking
         boolean suppressAttack = controlDecision.requestRetarget
                 || controlDecision.phase == CombatControlModel.Phase.REASSESS;
 
@@ -222,63 +209,59 @@ public class CombatExecutionController {
             return publishState(state(self, target, retreatRoute.reason, false));
         }
 
-        CombatTrackingModel.Snapshot tracking = tactical.getTrackingState();
-
-        // Rotation: KillAura (Myau) handles rotation when ON.
-        // When KillAura is OFF, we set rotation via AimController for movement.
-        float yawError;
-        float pitchError;
-        if (killAuraActive) {
-            // KillAura handles rotation — don't interfere.
-            // Compute yawError for movement decisions only (don't set rotation).
-            yawError = computeYawError(self, target);
-            pitchError = 0.0F;
-            rotationAlignedTick = 10; // KillAura is responsible for alignment
-        } else {
-            // Aim at target — this sets rotationYaw/pitch so movement works correctly.
-            AimController.Result aim = aimController.update(self, target, tracking, distance, visible, true);
-            yawError = aim.yawError;
-            pitchError = aim.pitchError;
-            if (aim.aligned) {
-                rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
-            } else {
-                rotationAlignedTick = 0;
-            }
-        }
-
-        // === Combat Pathfinding: A*-based terrain-aware path to target ===
+        // Compute the same combat path that PathRenderer displays before any
+        // rotation or movement decision is made.
         lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
         Path combatPath = lastCombatPath;
-        CombatStuckDetector.RecoveryAction stuckAction = combatStuck.update(self, now / 50L);
 
-        // Handle stuck recovery
+        CombatStuckDetector.RecoveryAction stuckAction = combatStuck.update(self, now / 50L);
         if (stuckAction == CombatStuckDetector.RecoveryAction.FULL_REPLAN) {
             combatPathFinder.reset();
             lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
             combatPath = lastCombatPath;
         }
 
-        // Compute steering from path
+        // When KillAura is OFF, rotate toward the exact active rendered
+        // waypoint. When ON, never touch the player's rotation here.
+        float yawError;
+        float pitchError;
+        if (killAuraActive) {
+            yawError = computeYawError(self, target);
+            pitchError = 0.0F;
+            rotationAlignedTick = ROTATION_MIN_DELAY;
+        } else if (combatPath != null && !combatPath.isFinished() && combatPath.current() != null) {
+            PathNode waypoint = combatPath.current();
+            double waypointX = waypoint.x + 0.5D;
+            double waypointY = waypoint.y + 1.0D;
+            double waypointZ = waypoint.z + 0.5D;
+            yawError = rotation.tick(self, waypointX, waypointY, waypointZ, 0.0F);
+            pitchError = 0.0F;
+            if (yawError <= 10.0F) rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
+            else rotationAlignedTick = 0;
+        } else {
+            AimController.Result aim = aimController.update(self, target, tactical.getTrackingState(), distance, visible, true);
+            yawError = aim.yawError;
+            pitchError = aim.pitchError;
+            if (aim.aligned) rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
+            else rotationAlignedTick = 0;
+        }
+
+        // CombatSteering advances the same Path instance that is rendered,
+        // then computes movement from that active waypoint.
         CombatSteering.Result steer = combatSteering.compute(self, combatPath, distance);
 
-        // State machine transitions
         boolean inRange = distance <= 3.20D;
         boolean canAttackNow = action == CombatDecisionEngine.Action.ATTACK
                 && controlDecision.allowAttack && !suppressAttack;
 
         if (inRange && rotationAlignedTick >= ROTATION_MIN_DELAY) {
-            if (attackTimer == 0 && canAttackNow) {
-                combatState = CombatState.ATTACK_READY;
-            } else if (attackTimer > 0) {
-                combatState = CombatState.COOLDOWN;
-            } else {
-                combatState = CombatState.AIM;
-            }
+            if (attackTimer == 0 && canAttackNow) combatState = CombatState.ATTACK_READY;
+            else if (attackTimer > 0) combatState = CombatState.COOLDOWN;
+            else combatState = CombatState.AIM;
         } else {
             combatState = CombatState.APPROACH;
         }
 
-        // Apply movement from CombatSteering
         movement.forward(steer.forward);
         movement.backward(steer.backward);
         movement.strafe(steer.strafe);
@@ -287,7 +270,7 @@ public class CombatExecutionController {
             movement.jump();
             jumpTimer = 6;
         }
-        movement.attack(false);  // KillAura handles attack
+        movement.attack(false);
 
         CombatTelemetry previous = telemetry;
         telemetry = new CombatTelemetry(
@@ -296,17 +279,17 @@ public class CombatExecutionController {
                 visible, distance, previous.navigationOutcome, previous.megastreakId, previous.streak, previous.reason)
                 .withFeedback(feedbackState.event.name(), feedbackState.selfHealth, feedbackState.targetHealth);
 
-        // Build debug string
         int pathIdx = combatPath != null ? combatPath.getIndex() : 0;
         int pathSize = combatPath != null ? combatPath.getNodes().size() : 0;
-        combatDebug = String.format("State=%s T=%s D=%.1f Path=%d/%d Stuck=%s Sprint=%s Jump=%s Atk=%d",
+        combatDebug = String.format("State=%s T=%s D=%.1f Path=%d/%d Stuck=%s Sprint=%s Jump=%s Atk=%d Rot=%s",
                 combatState.name(),
                 target != null ? target.getName() : "none",
                 distance, pathIdx, pathSize,
                 stuckAction.name(),
                 steer.sprint ? "ON" : "OFF",
                 steer.jump ? "YES" : "no",
-                attackTimer);
+                attackTimer,
+                killAuraActive ? "KILLAURA" : "PATH");
 
         return publishState(new State(action.name(), distance, yawError, pitchError, visible,
                 combatState == CombatState.COOLDOWN,
@@ -320,21 +303,12 @@ public class CombatExecutionController {
         return state;
     }
 
-    public State getLastState() {
-        return lastState;
-    }
-
+    public State getLastState() { return lastState; }
     public CombatState getCombatState() { return combatState; }
     public CombatTarget getCurrentTarget() { return currentTarget; }
-
     public CombatTelemetry getTelemetry() { return telemetry; }
     public CombatNavigationCoordinator.Outcome getNavigationOutcome() { return combatCoordinator.getLastOutcome(); }
 
-
-    /**
-     * Compute horizontal yaw error to target WITHOUT setting rotation.
-     * Used when KillAura handles rotation (we only need error for movement).
-     */
     private static float computeYawError(EntityPlayerSP self, EntityPlayer target) {
         double dx = target.posX - self.posX;
         double dz = target.posZ - self.posZ;
