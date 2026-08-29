@@ -19,9 +19,9 @@ import net.minecraft.entity.player.EntityPlayer;
 /**
  * Main bot controller.
  *
- * After startup, CombatPathFinder is the single combat locomotion/pathfinding
- * system. The legacy PathFinder remains intentionally available for the
- * startup route that moves the player from the Pit entry position to mid.
+ * After startup, CombatPathFinder is the single locomotion/pathfinding system:
+ *   target acquisition -> nearest eligible target -> CombatPathFinder ->
+ *   CombatSteering -> MovementController -> attack when in range.
  */
 public class BotController {
     private static final double KILLAURA_RANGE = 3.5D;
@@ -34,7 +34,7 @@ public class BotController {
     private final CombatPhaseController combatPhaseController;
     private final PitRuntimeGuard runtimeGuard = new PitRuntimeGuard();
 
-    /* Startup route only. Active combat locomotion uses CombatPathFinder. */
+    /* Kept only for the startup route. Active post-startup locomotion uses CombatPathFinder. */
     private final PathFinder startupPathFinder = new PathFinder();
     private final PitStartupSequence startupSequence;
 
@@ -51,7 +51,7 @@ public class BotController {
         this.combatExecutor.bindMegastreakProfile(this.pit.getStreakControl().getActiveMegastreak());
         this.combatPhaseController = new CombatPhaseController(mc, movement, rotation,
                 pit.getZones(), pit.getTargets(), pit.getStreak(), combatExecutor);
-        this.startupSequence = new PitStartupSequence(mc, movement, startupPathFinder);
+        this.startupSequence = new PitStartupSequence(mc, movement, startupPathFinder, rotation);
     }
 
     public void toggle() {
@@ -97,10 +97,7 @@ public class BotController {
         if (!startupSequence.isComplete()) {
             startupSequence.tick(player);
             state = BotState.WALKING;
-            // IMPORTANT: do not release movement here.
-            // PitStartupSequence.followPath() has just populated the movement
-            // inputs for this tick; releasing them immediately cancels the
-            // first startup path step and makes the initial path appear dead.
+            // PitStartupSequence owns movement for this tick. Do not clear its inputs.
             return;
         }
 
@@ -160,12 +157,6 @@ public class BotController {
             return;
         }
 
-        /*
-         * Do not inherit any strategic target chosen by the old scoring pipeline.
-         * Re-scan explicitly and select the nearest target that satisfies the
-         * TargetTracker eligibility policy. CombatPathFinder then follows that
-         * exact entity.
-         */
         EntityPlayer target = pit.getTargets().findBest(
                 mc.theWorld,
                 player,
@@ -181,7 +172,6 @@ public class BotController {
             return;
         }
 
-        /* Never pursue a protected target. */
         if (pit.getZones().isPlayerProtected(target)) {
             pit.getTargets().clear();
             ensureKillAuraOff();
@@ -192,21 +182,13 @@ public class BotController {
         combatExecutor.bindMegastreakProfile(pit.getStreakControl().getActiveMegastreak());
         updateKillAura(player, target);
 
-        /*
-         * Single combat movement pipeline. ATTACK is requested continuously;
-         * CombatExecutionController only considers the attack ready when the
-         * target is actually inside its combat range and its control policy
-         * allows the attack.
-         */
         CombatExecutionController.State combatState = combatExecutor.tick(
                 player,
                 target,
                 CombatDecisionEngine.Action.ATTACK,
                 System.currentTimeMillis());
 
-        state = combatState == null
-                ? BotState.WALKING
-                : (combatState.inRange ? BotState.WALKING : BotState.WALKING);
+        state = combatState == null ? BotState.WALKING : BotState.WALKING;
     }
 
     public void onDisconnect() {
@@ -272,10 +254,13 @@ public class BotController {
     public CombatExecutionController getCombatExecutor() { return combatExecutor; }
     public boolean isKillAuraActive() { return killAuraActive; }
 
-    /** Active rendered path is the CombatPathFinder path. */
+    /** Render the startup path while startup is active, otherwise render the combat path. */
     public Path getPath() {
-        Path combatPath = combatExecutor.getLastCombatPath();
-        return combatPath != null ? combatPath : null;
+        if (!startupSequence.isComplete()) {
+            Path startupPath = startupSequence.getPath();
+            if (startupPath != null) return startupPath;
+        }
+        return combatExecutor.getLastCombatPath();
     }
 
     public BotState getState() { return state; }
@@ -283,7 +268,6 @@ public class BotController {
     public PitMode getPitMode() { return pit.getMode(); }
     public PitDecisionEngine getPit() { return pit; }
     public String getRuntimeGuardStatus() { return runtimeGuard.getStatus().name(); }
-
     public double getTargetScore() { return pit.getTargets().getTargetScore(); }
     public com.atlasdead.wanderbot.pit.TargetTracker.ArmorProfile getTargetArmor() { return pit.getTargets().getTargetArmor(); }
 
