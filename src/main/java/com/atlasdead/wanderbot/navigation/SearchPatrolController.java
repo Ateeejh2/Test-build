@@ -9,8 +9,10 @@ import java.util.Set;
 
 /**
  * Search/patrol state for target-less navigation.
- * Keeps exploration moving through fresh areas and can force a new search goal
- * when progress stalls, while leaving target acquisition to the Pit target layer.
+ * A selected goal is kept until the normal path reaches it or another layer
+ * explicitly invalidates the path.  Stuck recovery is responsible for handling
+ * genuine movement failures; lack of progress alone must not destroy a valid
+ * route and cause the bot to stop/replan repeatedly.
  */
 public final class SearchPatrolController {
     private final ArrayDeque<String> recentGoals = new ArrayDeque<String>();
@@ -41,8 +43,11 @@ public final class SearchPatrolController {
         if (!searching || player == null) return;
         double dx = player.posX - lastX;
         double dz = player.posZ - lastZ;
-        if (dx * dx + dz * dz < 0.0025D) noProgressTicks++;
-        else noProgressTicks = Math.max(0, noProgressTicks - 2);
+        if (dx * dx + dz * dz < 0.0025D) {
+            noProgressTicks++;
+        } else {
+            noProgressTicks = Math.max(0, noProgressTicks - 2);
+        }
         lastX = player.posX;
         lastZ = player.posZ;
     }
@@ -50,7 +55,9 @@ public final class SearchPatrolController {
     public boolean shouldReplan(boolean searching, BlockPos currentGoal) {
         if (!searching) return false;
         if (currentGoal == null || activeGoal == null) return true;
-        return !same(currentGoal, activeGoal) || noProgressTicks >= 28;
+        // Do not rebuild a route merely because progress is temporarily slow.
+        // StuckDetector/RecoveryController handles actual movement failure.
+        return !same(currentGoal, activeGoal);
     }
 
     public boolean allowsGoal(BlockPos goal) {
