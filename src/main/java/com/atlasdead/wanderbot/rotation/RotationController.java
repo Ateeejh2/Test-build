@@ -5,10 +5,9 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.util.MathHelper;
 
 /**
- * Humanized rotation controller with overshoot, micro-corrections,
- * variable speed, and occasional distraction.
- *
- * WatchDog-safe: rotation patterns match typical human input.
+ * Rotation controller with normal humanized combat rotation and a deterministic
+ * smooth path-rotation mode. Path rotation deliberately avoids random target
+ * offsets so the view remains aligned with the rendered waypoint.
  */
 public class RotationController {
     private float yawVelocity;
@@ -33,7 +32,6 @@ public class RotationController {
         targetYaw += yawBias;
         float targetPitch = (float)(-(Math.atan2(dy, horizontal) * 180.0D / Math.PI));
 
-        // Distraction: occasionally look away briefly
         if (distractionTicks > 0) {
             distractionTicks--;
             targetYaw += distractionYaw;
@@ -43,7 +41,6 @@ public class RotationController {
             targetYaw += distractionYaw;
         }
 
-        // Overshoot: occasionally overshoot the target
         if (overshootTicks > 0) {
             overshootTicks--;
             targetYaw += overshootAmount;
@@ -52,16 +49,13 @@ public class RotationController {
             overshootAmount = Humanizer.overshootDegrees();
         }
 
-        // Human-like noise with occasional larger spikes
         noise = noise * 0.88F + (float)((Math.random() - 0.5D) * 0.18D);
-        // Occasional micro-jitter
         float jitter = Humanizer.microJitter();
         targetYaw += noise + jitter;
 
         float delta = MathHelper.wrapAngleTo180_float(targetYaw - player.rotationYaw);
         lastYawError = Math.abs(delta);
 
-        // Variable speed based on distance and context
         float speedMult = Humanizer.rotationSpeedMultiplier();
         float desired;
         if (lastYawError > 120.0F) desired = 28.0F * speedMult;
@@ -80,7 +74,6 @@ public class RotationController {
         player.rotationYawHead = player.rotationYaw;
         player.renderYawOffset = player.rotationYaw;
 
-        // Pitch: more human-like with variable speed and slight imperfection
         float pitchDelta = MathHelper.wrapAngleTo180_float(targetPitch - player.rotationPitch);
         float pitchNoise = Humanizer.gaussian(0.3F);
         float desiredPitch = (pitchDelta + pitchNoise) * 0.28F;
@@ -94,10 +87,47 @@ public class RotationController {
     }
 
     /**
-     * Sprint toggle controller for combat movement.
-     * Returns true if sprint should be on, false if it should be toggled off.
-     * Simulates sprint-reset pattern (every 3-8 ticks during combat).
+     * Deterministic smooth rotation used when following a rendered path.
+     * It keeps the same acceleration/easing model but does not add randomized
+     * overshoot, distraction, or jitter, so the player stays aimed at the
+     * exact active waypoint.
      */
+    public float tickPath(EntityPlayerSP player, double targetX, double targetY, double targetZ) {
+        double dx = targetX - player.posX;
+        double dy = targetY - (player.posY + player.getEyeHeight());
+        double dz = targetZ - player.posZ;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        if (horizontal < 0.001D) return lastYawError;
+
+        float targetYaw = (float)(Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
+        float targetPitch = (float)(-(Math.atan2(dy, horizontal) * 180.0D / Math.PI));
+        float delta = MathHelper.wrapAngleTo180_float(targetYaw - player.rotationYaw);
+        lastYawError = Math.abs(delta);
+
+        float desired;
+        if (lastYawError > 90.0F) desired = 18.0F;
+        else if (lastYawError > 45.0F) desired = 14.0F;
+        else if (lastYawError > 20.0F) desired = 10.0F;
+        else if (lastYawError > 6.0F) desired = 6.0F;
+        else desired = 2.2F;
+
+        if (delta < 0.0F) desired = -desired;
+        float acceleration = lastYawError > 35.0F ? 3.5F : 2.4F;
+        yawVelocity = approach(yawVelocity, desired, acceleration);
+
+        float step = Math.min(lastYawError, Math.max(0.75F, Math.abs(yawVelocity)));
+        player.rotationYaw += delta < 0.0F ? -step : step;
+        player.rotationYawHead = player.rotationYaw;
+        player.renderYawOffset = player.rotationYaw;
+
+        float pitchDelta = MathHelper.wrapAngleTo180_float(targetPitch - player.rotationPitch);
+        float desiredPitch = Math.max(-4.0F, Math.min(4.0F, pitchDelta * 0.32F));
+        pitchVelocity = approach(pitchVelocity, desiredPitch, 1.2F);
+        player.rotationPitch += pitchVelocity;
+        player.rotationPitch = Math.max(-89.0F, Math.min(89.0F, player.rotationPitch));
+        return lastYawError;
+    }
+
     public boolean shouldSprint(boolean currentSprint) {
         if (sprintBurstRemaining > 0) {
             sprintBurstRemaining--;
@@ -105,15 +135,11 @@ public class RotationController {
         }
         if (Humanizer.shouldToggleSprintOff()) {
             sprintBurstRemaining = Humanizer.sprintBurstTicks();
-            return false; // Toggle off briefly
+            return false;
         }
         return currentSprint;
     }
 
-    /**
-     * Micro-pause controller.
-     * Returns true if movement should be paused this tick.
-     */
     public boolean shouldMicroPause() {
         if (microPauseRemaining > 0) {
             microPauseRemaining--;
