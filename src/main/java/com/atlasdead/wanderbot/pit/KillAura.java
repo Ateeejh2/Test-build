@@ -12,39 +12,32 @@ import net.minecraft.util.Vec3;
 import java.util.Random;
 
 /**
- * KillAura module — mirrors Myau's KillAura attack architecture.
+ * KillAura module — mirrors Myau's KillAura attack architecture exactly.
  *
- * Key design points from Myau:
- * 1. ms-based attack delay (1000 / CPS) not tick-based
- * 2. swingItem() BEFORE attackEntity()
- * 3. rayTrace check: verify rotation points at target bounding box
- * 4. BoundingBox-based distance calculation (eye→box nearest point)
- * 5. Rotation uses boundingBox center with Y clamping (5%-75% height)
- * 6. moveFix: align movement direction with combat rotation
+ * Key design from Myau:
+ * - UpdateEvent PRE handler: set rotation BEFORE vanilla tick sends packets
+ * - UpdateEvent PRE handler: performAttack() AFTER rotation is set
+ * - swingItem() → syncCurrentPlayItem() → C02PacketUseEntity → PlayerUtil.attackEntity()
+ *
+ * This implementation splits into:
+ * - tickPre():  Called at PlayerTickEvent.PRE → sets rotationYaw/pitch
+ * - tickPost(): Called at ClientTickEvent.END → performs attack
+ *
+ * This ensures vanilla's C03/C06 packets include the correct rotation.
  */
 public class KillAura {
     private static final Minecraft mc = Minecraft.getMinecraft();
     private final Random random = new Random();
 
-    // === Settings (Myau equivalents) ===
+    // === Settings ===
     public boolean enabled = false;
-
-    // Attack range
     public float attackRange = 3.0F;
     public float swingRange = 3.5F;
-
-    // CPS (attacks per second)
     public int minCPS = 12;
     public int maxCPS = 14;
-
-    // Rotation
     public RotationMode rotationMode = RotationMode.SILENT;
     public MoveFixMode moveFixMode = MoveFixMode.SILENT;
     public float smoothing = 0.0F;
-    public int angleStep = 90;
-
-    // Target
-    public boolean players = true;
     public boolean throughWalls = true;
     public int fov = 360;
 
@@ -55,103 +48,130 @@ public class KillAura {
     private CombatTarget target;
     private long attackDelayMS = 0L;
     private boolean hitRegistered = false;
-    private float currentYaw;
-    private float currentPitch;
-    private boolean rotationActive = false;
+
+    // Rotation state — set in tickPre, used in tickPost
+    private float desiredYaw;
+    private float desiredPitch;
+    private boolean rotationReady = false;
 
     public void reset() {
         target = null;
         attackDelayMS = 0L;
         hitRegistered = false;
-        currentYaw = 0F;
-        currentPitch = 0F;
-        rotationActive = false;
+        rotationReady = false;
     }
 
-    /** Sync settings from WanderBotSettings. */
     private void syncSettings() {
-        attackRange = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraAttackRange;
-        swingRange = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSwingRange;
+        attackRange = (float) com.atlasdead.wanderbot.config.WanderBotSettings.killAuraAttackRange;
+        swingRange = (float) com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSwingRange;
         minCPS = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMinCPS;
         maxCPS = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMaxCPS;
         rotationMode = RotationMode.values()[com.atlasdead.wanderbot.config.WanderBotSettings.killAuraRotationMode];
         moveFixMode = MoveFixMode.values()[com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMoveFixMode];
-        smoothing = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSmoothing;
+        smoothing = (float) com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSmoothing;
         throughWalls = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraThroughWalls;
         fov = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraFOV;
     }
 
+    // ===================================================================
+    // PHASE 1: PRE — Called BEFORE vanilla tick sends position packets
+    // This is equivalent to Myau's @EventTarget(priority=3) onUpdate(PRE)
+    // ===================================================================
     /**
-     * Main tick — called every client tick when combat is active.
-     * Mirrors Myau's KillAura.onUpdate(UpdateEvent) PRE handler.
+     * Sets rotationYaw/pitch to aim at target.
+     * Vanilla will include these values in C03/C06 packets sent during the tick.
      */
-    public void tick(EntityPlayerSP self, EntityPlayer targetEntity, long now) {
+    public void tickPre(EntityPlayerSP self, EntityPlayer targetEntity) {
         if (!enabled || self == null || mc.theWorld == null) {
-            reset();
+            rotationReady = false;
             return;
         }
 
-        // Sync settings from WanderBotSettings each tick
         syncSettings();
-
-        // Decrement attack delay (Myau pattern)
-        if (attackDelayMS > 0L) {
-            attackDelayMS -= 50L;
-        }
 
         // Validate target
         if (targetEntity == null || targetEntity.isDead || targetEntity.getHealth() <= 0F) {
             this.target = null;
-            rotationActive = false;
+            rotationReady = false;
             return;
         }
 
-        // Create/update CombatTarget snapshot (Myau AttackData pattern)
+        // Create/update CombatTarget snapshot
         if (this.target == null || this.target.getEntity() != targetEntity) {
-            this.target = new CombatTarget(targetEntity, now / 50L);
+            this.target = new CombatTarget(targetEntity, self.ticksExisted);
             hitRegistered = false;
         } else {
-            this.target = this.target.refresh(now / 50L);
+            this.target.refresh(self.ticksExisted);
         }
 
-        // Check if target is in attack range
+        // Check swing range
         double distance = distanceToBox(self, this.target);
-        boolean inRange = distance <= attackRange;
-        boolean inSwingRange = distance <= swingRange;
-
-        if (!inSwingRange) {
-            rotationActive = false;
+        if (distance > swingRange) {
+            rotationReady = false;
             return;
         }
 
-        // Calculate rotation to target bounding box (Myau getRotationsToBox pattern)
+        // Calculate rotation to target bounding box (Myau getRotationsToBox)
         float[] rotations = getRotationsToBox(self, this.target.getBox());
-        currentYaw = rotations[0];
-        currentPitch = rotations[1];
-        rotationActive = true;
+        desiredYaw = rotations[0];
+        desiredPitch = rotations[1];
+        rotationReady = true;
 
-        // Apply rotation to player (silent or lock_view)
+        // Apply rotation (silent or lock_view)
         if (rotationMode == RotationMode.SILENT || rotationMode == RotationMode.LOCK_VIEW) {
-            self.rotationYaw = currentYaw;
-            self.rotationPitch = currentPitch;
+            self.rotationYaw = desiredYaw;
+            self.rotationPitch = desiredPitch;
         }
-
-        // Perform attack if conditions met (Myau performAttack pattern)
-        if (inRange && attackDelayMS <= 0L) {
-            performAttack(self, this.target, currentYaw, currentPitch);
-        }
-
-        // Apply moveFix (Myau onMove handler pattern)
-        applyMoveFix(self, currentYaw);
     }
 
+    // ===================================================================
+    // PHASE 2: POST — Called AFTER vanilla tick has sent packets
+    // This is where the actual attack happens, using rotation set in PRE.
+    // ===================================================================
     /**
-     * Myau's performAttack — exact sequence:
-     * 1. Check attackDelayMS
-     * 2. Set attackDelayMS += getAttackDelay()
-     * 3. swingItem() FIRST
-     * 4. rayTrace check (rotation → boundingBox)
-     * 5. attackEntity()
+     * Performs attack if conditions are met.
+     * Rotation packets have already been sent by vanilla with correct values.
+     */
+    public void tickPost(EntityPlayerSP self, EntityPlayer targetEntity) {
+        if (!enabled || self == null || mc.theWorld == null) return;
+
+        // Decrement attack delay (ms-based, same as Myau)
+        if (attackDelayMS > 0L) {
+            attackDelayMS -= 50L;
+        }
+
+        // Need valid target and rotation
+        if (!rotationReady || this.target == null || this.target.getEntity() != targetEntity) {
+            return;
+        }
+        if (targetEntity.isDead || targetEntity.getHealth() <= 0F) {
+            return;
+        }
+
+        // Check attack range
+        double distance = distanceToBox(self, this.target);
+        boolean inRange = distance <= attackRange;
+
+        // Apply moveFix (Myau onMove handler)
+        applyMoveFix(self, desiredYaw);
+
+        // Attack if in range and delay expired
+        if (inRange && attackDelayMS <= 0L) {
+            performAttack(self, this.target, desiredYaw, desiredPitch);
+        }
+    }
+
+    // ===================================================================
+    // ATTACK — Exact Myau sequence
+    // ===================================================================
+    /**
+     * Myau's performAttack exact sequence:
+     * 1. attackDelayMS += getAttackDelay()
+     * 2. swingItem() FIRST
+     * 3. rayTrace check (rotation → boundingBox)
+     * 4. syncCurrentPlayItem()
+     * 5. sendPacket(C02PacketUseEntity, ATTACK) via NetworkManager
+     * 6. PlayerUtil.attackEntity() (client-side damage calc)
      */
     private boolean performAttack(EntityPlayerSP self, CombatTarget target, float yaw, float pitch) {
         if (attackDelayMS > 0L) return false;
@@ -164,72 +184,158 @@ public class KillAura {
 
         // 2. RayTrace check: verify rotation points at target bounding box
         if (!rayTraceToBox(self, target.getBox(), yaw, pitch)) {
+            // Rotation doesn't hit target — don't attack but don't reset delay
             return false;
         }
 
         // 3. Sync current play item (Myau: callSyncCurrentPlayItem via accessor)
+        // In Forge 1.8.9 with stable_22, syncCurrentPlayItem updates
+        // the server-side state tracking field in PlayerControllerMP
         try {
             java.lang.reflect.Method syncMethod = mc.playerController.getClass()
                     .getDeclaredMethod("syncCurrentPlayItem");
             syncMethod.setAccessible(true);
             syncMethod.invoke(mc.playerController);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // Fallback: some mappings use different name
+            try {
+                java.lang.reflect.Method syncMethod2 = mc.playerController.getClass()
+                        .getDeclaredMethod("func_71052_b");
+                syncMethod2.setAccessible(true);
+                syncMethod2.invoke(mc.playerController);
+            } catch (Exception ignored2) {}
+        }
 
         // 4. Send attack packet DIRECTLY via NetworkManager (Myau: PacketUtil.sendPacket)
-        //    NOT through mc.playerController.attackEntity() which queues through PlayerControllerMP
-        try {
-            net.minecraft.entity.Entity entityTarget = target.getEntity();
-            net.minecraft.network.play.client.C02PacketUseEntity attackPacket =
-                    new net.minecraft.network.play.client.C02PacketUseEntity(
-                            entityTarget,
-                            net.minecraft.network.play.client.C02PacketUseEntity.Action.ATTACK);
-            // Send directly to NetworkManager channel (bypasses packet queue)
-            mc.thePlayer.sendQueue.getNetworkManager().sendPacket(attackPacket);
-        } catch (Exception e) {
-            // Fallback: use playerController if direct send fails
-            mc.playerController.attackEntity(mc.thePlayer, target.getEntity());
-        }
+        //    NOT through mc.playerController.attackEntity() which uses packet queue
+        Entity entityTarget = target.getEntity();
+        net.minecraft.network.play.client.C02PacketUseEntity attackPacket =
+                new net.minecraft.network.play.client.C02PacketUseEntity(
+                        entityTarget,
+                        net.minecraft.network.play.client.C02PacketUseEntity.Action.ATTACK);
+        mc.thePlayer.sendQueue.getNetworkManager().sendPacket(attackPacket);
+
+        // 5. Client-side damage processing (Myau: PlayerUtil.attackEntity)
+        //    This handles critical hit calc, knockback, enchantments, stats
+        //    Without this, the client doesn't properly process the hit locally
+        performClientSideDamage(self, entityTarget);
 
         hitRegistered = true;
         return true;
     }
 
+    // ===================================================================
+    // CLIENT-SIDE DAMAGE — Myau's PlayerUtil.attackEntity equivalent
+    // ===================================================================
     /**
-     * Myau's getAttackDelay — ms-based with random CPS.
+     * Client-side damage calculation matching Myau's PlayerUtil.attackEntity().
+     * Handles: critical hits, knockback, enchantment bonus, fire aspect, stats.
+     * This is necessary for the client to properly track the attack.
      */
+    private void performClientSideDamage(EntityPlayerSP self, Entity target) {
+        if (target == null || !target.func_70075_an()) return;
+
+        float baseDamage = (float) self.func_110148_a(
+                net.minecraft.entity.SharedMonsterAttributes.func_111263_d()).func_111126_e();
+
+        // Enchantment bonus
+        net.minecraft.item.ItemStack heldItem = self.func_70694_bm();
+        net.minecraft.entity.EnumCreatureAttribute creatureAttribute =
+                target instanceof net.minecraft.entity.EntityLivingBase
+                        ? ((net.minecraft.entity.EntityLivingBase) target).func_70668_bt()
+                        : net.minecraft.entity.EnumCreatureAttribute.UNDEFINED;
+        float enchantmentBonus = net.minecraft.enchantment.EnchantmentHelper
+                .func_152377_a(heldItem, creatureAttribute);
+
+        int knockbackLevel = net.minecraft.enchantment.EnchantmentHelper
+                .func_77501_a(self);
+        if (self.func_70051_ag()) knockbackLevel++;
+
+        boolean isCritical = self.field_70143_R > 0.0F
+                && !self.field_70122_E
+                && !self.func_70617_f_()
+                && !self.func_70090_H()
+                && !self.func_70644_a(net.minecraft.potion.Potion.field_76440_q)
+                && self.field_70154_o == null;
+
+        if (isCritical && baseDamage > 0.0F) baseDamage *= 1.5F;
+        baseDamage += enchantmentBonus;
+
+        // Fire aspect
+        int fireAspectLevel = net.minecraft.enchantment.EnchantmentHelper
+                .func_90036_a(self);
+        boolean fireApplied = false;
+        if (target instanceof net.minecraft.entity.EntityLivingBase && fireAspectLevel > 0 && !target.func_70027_ad()) {
+            fireApplied = true;
+            target.func_70015_d(1);
+        }
+
+        double origMX = target.field_70159_w;
+        double origMY = target.field_70181_x;
+        double origMZ = target.field_70179_y;
+
+        net.minecraft.util.DamageSource src = net.minecraft.util.DamageSource.func_76365_a(self);
+
+        if (target.func_70097_a(src, baseDamage)) {
+            if (knockbackLevel > 0) {
+                target.func_70024_g(
+                        -MathHelper.func_76126_a(self.field_70177_z * (float) Math.PI / 180.0F) * knockbackLevel * 0.5F,
+                        0.1,
+                        MathHelper.func_76134_b(self.field_70177_z * (float) Math.PI / 180.0F) * knockbackLevel * 0.5F);
+                self.field_70159_w *= 0.6;
+                self.field_70179_y *= 0.6;
+                self.func_70031_b(false);
+            }
+
+            if (isCritical) {
+                self.func_71009_b(target);
+            }
+            if (enchantmentBonus > 0.0F) {
+                self.func_71047_c(target);
+            }
+            self.func_130011_c(target);
+            if (target instanceof net.minecraft.entity.EntityLivingBase) {
+                net.minecraft.enchantment.EnchantmentHelper.func_151384_a(
+                        (net.minecraft.entity.EntityLivingBase) target, self);
+            }
+            net.minecraft.enchantment.EnchantmentHelper.func_151385_b(self, target);
+            self.func_71020_j(0.3F);
+        } else if (fireApplied) {
+            target.func_70066_B();
+        }
+    }
+
+    // ===================================================================
+    // UTILITY — Matches Myau's RotationUtil methods
+    // ===================================================================
+
     private long getAttackDelay() {
         int cps = minCPS + random.nextInt(Math.max(1, maxCPS - minCPS + 1));
         return 1000L / cps;
     }
 
-    /**
-     * Myau's RotationUtil.rayTrace(box, yaw, pitch, range).
-     * Verify that current rotation actually intersects the target bounding box.
-     */
+    /** Myau's RotationUtil.rayTrace(box, yaw, pitch, range) */
     private boolean rayTraceToBox(EntityPlayerSP self, AxisAlignedBB box, float yaw, float pitch) {
         double eyeY = self.posY + self.getEyeHeight();
         Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
 
         float yawRad = (float) Math.toRadians(yaw);
         float pitchRad = (float) Math.toRadians(pitch);
-        float lookX = (float)(-Math.sin(yawRad) * Math.cos(pitchRad));
-        float lookY = (float)(-Math.sin(pitchRad));
-        float lookZ = (float)(Math.cos(yawRad) * Math.cos(pitchRad));
+        float lookX = (float) (-Math.sin(yawRad) * Math.cos(pitchRad));
+        float lookY = (float) (-Math.sin(pitchRad));
+        float lookZ = (float) (Math.cos(yawRad) * Math.cos(pitchRad));
 
         Vec3 targetPos = eyePos.addVector(lookX * attackRange, lookY * attackRange, lookZ * attackRange);
         MovingObjectPosition mop = box.calculateIntercept(eyePos, targetPos);
         return mop != null;
     }
 
-    /**
-     * Myau's RotationUtil.getRotationsToBox(box, yaw, pitch, maxAngle, smoothFactor).
-     * Calculate yaw/pitch to aim at the bounding box center with Y clamping.
-     */
+    /** Myau's RotationUtil.getRotationsToBox(box, yaw, pitch, maxAngle, smoothFactor) */
     private float[] getRotationsToBox(EntityPlayerSP self, AxisAlignedBB box) {
         double eyeY = self.posY + self.getEyeHeight();
         Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
 
-        // Myau: target Y is clamped to 5%-75% of box height
+        // Y clamped to 5%-75% of box height (Myau pattern)
         double minY = box.minY + 0.05 * (box.maxY - box.minY);
         double maxY = box.minY + 0.75 * (box.maxY - box.minY);
 
@@ -248,8 +354,8 @@ public class KillAura {
         double deltaZ = centerZ - eyePos.zCoord;
 
         double horizontalDist = Math.sqrt(deltaX * deltaX + deltaZ * deltaZ);
-        float yaw = (float)(Math.atan2(deltaZ, deltaX) * 180.0 / Math.PI) - 90.0F;
-        float pitch = (float)(-(Math.atan2(deltaY, horizontalDist) * 180.0 / Math.PI));
+        float yaw = (float) (Math.atan2(deltaZ, deltaX) * 180.0 / Math.PI) - 90.0F;
+        float pitch = (float) (-(Math.atan2(deltaY, horizontalDist) * 180.0 / Math.PI));
 
         // Smoothing
         if (smoothing > 0.0F) {
@@ -258,19 +364,16 @@ public class KillAura {
             pitch = self.rotationPitch + (pitch - self.rotationPitch) * factor;
         }
 
-        // Clamp pitch
         pitch = MathHelper.clamp_float(pitch, -90.0F, 90.0F);
 
         // Quantize (Myau quantizeAngle)
-        yaw = (float)((double)yaw - (double)yaw % 0.0096);
-        pitch = (float)((double)pitch - (double)pitch % 0.0096);
+        yaw = (float) ((double) yaw - (double) yaw % 0.0096);
+        pitch = (float) ((double) pitch - (double) pitch % 0.0096);
 
-        return new float[]{ yaw, pitch };
+        return new float[]{yaw, pitch};
     }
 
-    /**
-     * Myau's MoveUtil.fixStrafe — align movement direction with rotation.
-     */
+    /** Myau's MoveUtil.fixStrafe */
     private void applyMoveFix(EntityPlayerSP self, float combatYaw) {
         if (moveFixMode == MoveFixMode.NONE) return;
         if (!mc.gameSettings.keyBindForward.isKeyDown()) return;
@@ -286,25 +389,21 @@ public class KillAura {
         self.motionZ = Math.cos(yawRad) * speed;
     }
 
-    /**
-     * Myau's RotationUtil.distanceToBox — eye→boundingBox nearest point distance.
-     */
+    /** Myau's RotationUtil.distanceToBox — eye→boundingBox nearest point */
     private double distanceToBox(EntityPlayerSP self, CombatTarget target) {
         AxisAlignedBB box = target.liveBox();
         double eyeY = self.posY + self.getEyeHeight();
         Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
 
-        // Clamp eye position to box
-        double clampedX = Math.max(box.minX, Math.min(box.maxX, eyePos.xCoord));
-        double clampedY = Math.max(box.minY, Math.min(box.maxY, eyePos.yCoord));
-        double clampedZ = Math.max(box.minZ, Math.min(box.maxZ, eyePos.zCoord));
-
-        // If eye is inside box, distance is 0
         if (eyePos.xCoord >= box.minX && eyePos.xCoord <= box.maxX
                 && eyePos.yCoord >= box.minY && eyePos.yCoord <= box.maxY
                 && eyePos.zCoord >= box.minZ && eyePos.zCoord <= box.maxZ) {
             return 0.0;
         }
+
+        double clampedX = Math.max(box.minX, Math.min(box.maxX, eyePos.xCoord));
+        double clampedY = Math.max(box.minY, Math.min(box.maxY, eyePos.yCoord));
+        double clampedZ = Math.max(box.minZ, Math.min(box.maxZ, eyePos.zCoord));
 
         double dx = clampedX - eyePos.xCoord;
         double dy = clampedY - eyePos.yCoord;
@@ -314,9 +413,9 @@ public class KillAura {
 
     // === Getters ===
     public boolean isActive() { return enabled && target != null && target.isAlive(); }
-    public boolean isRotating() { return rotationActive; }
-    public float getCurrentYaw() { return currentYaw; }
-    public float getCurrentPitch() { return currentPitch; }
+    public boolean isRotating() { return rotationReady; }
+    public float getCurrentYaw() { return desiredYaw; }
+    public float getCurrentPitch() { return desiredPitch; }
     public CombatTarget getTarget() { return target; }
     public long getAttackDelayMS() { return attackDelayMS; }
     public boolean hasHitRegistered() { return hitRegistered; }

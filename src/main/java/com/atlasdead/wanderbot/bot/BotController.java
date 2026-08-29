@@ -49,6 +49,7 @@ public class BotController {
     private final com.atlasdead.wanderbot.pit.PitExecutionOrchestrator executorRouter = new com.atlasdead.wanderbot.pit.PitExecutionOrchestrator();
     private final PitRuntimeGuard runtimeGuard = new PitRuntimeGuard();
     private CombatPhaseController combatPhaseController;
+    public final com.atlasdead.wanderbot.pit.KillAura killAura = new com.atlasdead.wanderbot.pit.KillAura();
 
     private BotState state = BotState.OFF;
     private Path path;
@@ -82,6 +83,9 @@ public class BotController {
         this.combatExecutor.bindMegastreakProfile(this.pit.getStreakControl().getActiveMegastreak());
         this.combatPhaseController = new CombatPhaseController(mc, movement, rotation,
                 pit.getZones(), pit.getTargets(), pit.getStreak());
+        // KillAura rotation/attack is now driven by WanderBotMod event handlers
+        // (PlayerTickEvent.PRE for rotation, ClientTickEvent.END for attack)
+        // to match Myau's UpdateEvent.PRE architecture.
     }
 
     public void toggle() { if (state == BotState.OFF) start(); else stop(); }
@@ -346,7 +350,13 @@ public class BotController {
                 desiredZ
         );
 
-        float yawError = rotation.tick(player, player.posX + avoid.x * 3.0D, steering.y, player.posZ + avoid.z * 3.0D, 0.0F);
+        // When KillAura is active, don't let navigation overwrite combat rotation
+        float yawError;
+        if (killAura.isRotating()) {
+            yawError = 0.0F; // KillAura controls rotation
+        } else {
+            yawError = rotation.tick(player, player.posX + avoid.x * 3.0D, steering.y, player.posZ + avoid.z * 3.0D, 0.0F);
+        }
 
         boolean tightTurn = yawError > 78.0F;
         boolean moderateTurn = yawError > 34.0F;
@@ -415,6 +425,18 @@ public class BotController {
     }
 
     private void handleAttackWindow(EntityPlayerSP player, EntityPlayer target) {
+        // When KillAura is active, it handles rotation and attack via tickPre/tickPost
+        // so we skip the old handleAttackWindow logic to avoid packet conflicts
+        if (killAura.isActive()) {
+            // KillAura manages its own attack timing and rotation
+            // Just stop navigation movement
+            movement.forward(false);
+            movement.strafe(0.0F);
+            movement.sprint(false);
+            path = null;
+            goal = null;
+            return;
+        }
         double distance = player.getDistanceToEntity(target);
         float yawError = rotation.tick(player, target.posX, target.posY + target.getEyeHeight() * 0.85D, target.posZ, 0.0F);
         movement.forward(false);

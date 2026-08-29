@@ -81,8 +81,34 @@ public class WanderBotMod {
         if (BOT != null) BOT.onDisconnect();
     }
 
+    /**
+     * KillAura rotation: PRE phase, BEFORE vanilla tick sends position packets.
+     * This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
+     * By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
+     * the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
+     */
+    @SubscribeEvent
+    public void onPlayerTick(TickEvent.PlayerTickEvent event) {
+        if (event.phase != TickEvent.Phase.PRE) return;
+        if (BOT == null || BOT.killAura == null || !BOT.killAura.enabled) return;
+        if (mc.thePlayer == null || mc.theWorld == null) return;
+        net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
+        if (target == null) return;
+        BOT.killAura.tickPre(mc.thePlayer, target);
+    }
+
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase == TickEvent.Phase.END && BOT != null) BOT.tick();
+        if (event.phase == TickEvent.Phase.END && BOT != null) {
+            // KillAura attack: POST phase, AFTER vanilla tick has sent packets
+            // Rotation was already sent by vanilla with correct values from tickPre
+            if (BOT.killAura != null && BOT.killAura.enabled) {
+                net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
+                if (target != null && mc.thePlayer != null) {
+                    BOT.killAura.tickPost(mc.thePlayer, target);
+                }
+            }
+            BOT.tick();
+        }
     }
 }
