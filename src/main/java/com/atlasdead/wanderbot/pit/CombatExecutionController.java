@@ -157,35 +157,6 @@ public class CombatExecutionController {
         return routeX * Math.cos(yaw) + routeZ * Math.sin(yaw);
     }
 
-    /**
-     * Send an explicit rotation packet to the server before attack packets.
-     */
-    private void sendRotationPacket(EntityPlayerSP self) {
-        try {
-            java.lang.reflect.Field connField = self.getClass().getField("connection");
-            Object conn = connField.get(self);
-            if (conn == null) return;
-
-            java.lang.reflect.Field nmField = conn.getClass().getField("netManager");
-            Object nm = nmField.get(conn);
-            if (nm == null) return;
-
-            Class<?> c06Class = Class.forName(
-                    "net.minecraft.network.play.client.C03PacketPlayer$C06PacketPlayerPosLook");
-            java.lang.reflect.Constructor<?> ctor = c06Class.getConstructor(
-                    double.class, double.class, double.class,
-                    float.class, float.class, boolean.class);
-            Object packet = ctor.newInstance(
-                    self.posX, self.posY, self.posZ,
-                    self.rotationYaw, self.rotationPitch, self.onGround);
-
-            java.lang.reflect.Method sendMethod = nm.getClass().getMethod("sendPacket",
-                    Class.forName("net.minecraft.network.Packet"));
-            sendMethod.invoke(nm, packet);
-        } catch (Exception ignored) {
-            // Fallback: rotation will be sent naturally via onUpdateWalkingPlayer.
-        }
-    }
 
     /**
      * Get attack delay in milliseconds (Myau pattern: 1000 / randomCPS).
@@ -221,15 +192,13 @@ public class CombatExecutionController {
 
     /**
      * Fix movement direction to align with rotation (Myau moveFix SILENT mode).
-     * When the player is pressing forward, reorient the movement vector to
-     * match the current rotationYaw instead of the vanilla look direction.
+     * Reorients motionX/motionZ to match combatYaw regardless of which keys
+     * are pressed — the bot controls movement via KeyBinding state, not
+     * physical key presses, so we cannot rely on isKeyDown().
      */
     private void applyMoveFix(EntityPlayerSP self, float combatYaw) {
-        if (!mc.gameSettings.keyBindForward.isKeyDown()) return;
-        // Calculate the angle between current yaw and combat yaw
         float yawDiff = MathHelper.wrapAngleTo180_float(combatYaw - self.rotationYaw);
-        if (Math.abs(yawDiff) < 1.0F) return; // No fix needed
-        // Adjust motionX/motionZ to align with combat yaw
+        if (Math.abs(yawDiff) < 1.0F) return;
         double speed = Math.sqrt(self.motionX * self.motionX + self.motionZ * self.motionZ);
         if (speed < 0.001D) return;
         double yawRad = Math.toRadians(combatYaw);

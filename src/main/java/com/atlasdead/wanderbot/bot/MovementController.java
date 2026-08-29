@@ -66,8 +66,23 @@ public class MovementController {
 
     /**
      * Performs the normal Minecraft 1.8.9 client-side attack action against
-     * the given entity. Uses the same client-side pipeline as a real player
-     * pressing left-click: attackEntity() + swingItem().
+     * the given entity. Uses the exact same pipeline as a real player
+     * pressing left-click.
+     *
+     * playerController.attackEntity() handles:
+     *   1. Sends C02PacketUseEntity (attack) to send queue
+     *   2. Calls attackTargetEntityWithCurrentItem() (client-side effects)
+     *   3. Calls swingItem() which sets isSwinging = true
+     *
+     * Then vanilla's onUpdateWalkingPlayer() handles:
+     *   4. Sends C03PacketPlayer (position/rotation)
+     *   5. Sends C0APacketAnimation (swing) because isSwinging == true
+     *
+     * Result: C02 → C03 → C0A (exactly one swing, correct order)
+     *
+     * Do NOT call swingItem() separately before attackEntity() — while
+     * swingItem() only sets state (no packet), calling it separately
+     * is unnecessary and could confuse future maintainers.
      *
      * @param target The entity to attack. Must not be null.
      */
@@ -75,10 +90,8 @@ public class MovementController {
         if (mc == null || mc.thePlayer == null || mc.playerController == null) return;
         if (target == null) return;
 
-        // Send arm swing FIRST, then attack.
-        // Anti-cheat (Vulcan Type 7) checks that swing packet arrives
-        // before or with the attack packet. Queue order = send order.
-        mc.thePlayer.swingItem();
+        // Vanilla left-click pipeline: attackEntity sends C02,
+        // calls swingItem() to set isSwinging, vanilla sends C0A later.
         mc.playerController.attackEntity(mc.thePlayer, target);
     }
 
