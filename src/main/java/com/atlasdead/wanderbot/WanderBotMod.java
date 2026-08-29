@@ -62,9 +62,12 @@ public class WanderBotMod {
 
     @SubscribeEvent
     public void onMouse(InputEvent.MouseInputEvent event) {
-        if (BOT != null && BOT.isEnabled() && Minecraft.getMinecraft().currentScreen == null) {
-            event.setCanceled(true);
-        }
+        // MouseInputEvent is NOT @Cancelable in Forge 1.8.9.
+        // Attempting setCanceled(true) throws IllegalArgumentException and crashes the game.
+        // Mouse clicks are harmless during bot operation since movement/rotation/attack
+        // are controlled via KeyBinding.setKeyBindState() which overrides player input.
+        // If accidental inventory opening is a concern, the bot can detect and close it
+        // in the tick handler instead.
     }
 
     @SubscribeEvent
