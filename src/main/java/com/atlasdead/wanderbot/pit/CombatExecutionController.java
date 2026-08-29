@@ -70,6 +70,7 @@ public class CombatExecutionController {
     private int rotationAlignedTick;
     private final CombatTacticalModel tactical = new CombatTacticalModel();
     private final CombatNavigationCoordinator combatCoordinator;
+    private final CombatNavigationController combatNavigation = new CombatNavigationController();
     // Combat pathfinding
     private final CombatPathFinder combatPathFinder = new CombatPathFinder();
     private final CombatSteering combatSteering = new CombatSteering();
