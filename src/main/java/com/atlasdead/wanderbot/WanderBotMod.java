@@ -81,10 +81,6 @@ public class WanderBotMod {
         if (BOT != null) BOT.onDisconnect();
     }
 
-    // KillAura removed — attack is now handled directly by CombatExecutionController
-    // using movement.attack(true) which simulates a mouse click.
-    // No special PlayerTickEvent handling needed.
-
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (BOT != null) BOT.tick();

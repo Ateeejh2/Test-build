@@ -446,8 +446,6 @@ public class CombatExecutionController {
     public CombatState getCombatState() { return combatState; }
     public CombatTarget getCurrentTarget() { return currentTarget; }
 
-    // executeAttack removed — delegated to KillAura module
-
     private void executeApproach(EntityPlayerSP self, EntityPlayer target, double distance,
                                  boolean visible, float yawError,
                                  CombatTacticalModel.State tacticalState,

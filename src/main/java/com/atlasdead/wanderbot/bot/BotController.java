@@ -416,22 +416,6 @@ public class BotController {
 
     public com.atlasdead.wanderbot.pit.CombatExecutionController getCombatExecutor() { return combatExecutor; }
 
-    private void handleAttackWindow(EntityPlayerSP player, EntityPlayer target) {
-        double distance = player.getDistanceToEntity(target);
-        float yawError = rotation.tick(player, target.posX, target.posY + target.getEyeHeight() * 0.85D, target.posZ, 0.0F);
-        movement.forward(false);
-        movement.strafe(0.0F);
-        movement.sprint(false);
-        if (distance <= 3.35D && yawError <= 30.0F && player.canEntityBeSeen(target) && attackCooldown == 0) {
-            movement.attack(false);
-            movement.clickAttack(target);
-            attackCooldown = 8 + random.nextInt(4);
-        }
-        path = null;
-        goal = null;
-        state = BotState.WALKING;
-    }
-
     private boolean handleApproachTarget(EntityPlayerSP player, EntityPlayer target) {
         if (target == null || target.isDead || target.getHealth() <= 0.0F) return false;
         BlockPos targetPos = new BlockPos(target.posX, target.posY, target.posZ);

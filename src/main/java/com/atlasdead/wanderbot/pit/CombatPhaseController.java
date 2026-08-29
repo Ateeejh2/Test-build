@@ -231,14 +231,11 @@ public final class CombatPhaseController {
         }
 
         // Execute via existing CombatExecutionController (single attack path)
-        // NOTE: sprint is set inside executor.tick() -> executeApproach/executeAttack()
-        // NOTE: do NOT also call checkAndExecuteAttack() here — it sends
-        // a second clickAttack() per tick, causing CPS that triggers WatchDog.
+        // Attack is handled by mc.clickMouse() inside executor.tick()
         executor.tick(self, target, action, System.currentTimeMillis());
 
         context.lastDecision = action.name();
         context.lastDecisionReason = combatResult.reason;
-        context.canAttack = canAttack(self, target, dist);
         return TickResult.handled();
     }
 
@@ -446,58 +443,6 @@ public final class CombatPhaseController {
     // =====================================================================
     // Auto-Attack (Legitimate 1.8.9 packets)
     // =====================================================================
-
-    /**
-     * Check attack conditions and execute via the standard client-side
-     * click pipeline (same as a real player pressing left-click).
-     * This sends the vanilla attack packet, not custom packets.
-     */
-    private void checkAndExecuteAttack(EntityPlayerSP self, EntityPlayer target, double distance) {
-        if (context.attackCooldown > 0) {
-            context.attackCooldown--;
-            context.canAttack = false;
-            return;
-        }
-
-        if (!canAttack(self, target, distance)) {
-            context.canAttack = false;
-            return;
-        }
-
-        // Humanization: occasional hesitation (skip attack)
-        if (Humanizer.shouldHesitate()) {
-            context.attackCooldown = Humanizer.range(1, 2);
-            context.canAttack = false;
-            return;
-        }
-
-        // Humanization: occasional miss (skip valid attack)
-        if (Humanizer.shouldMiss()) {
-            context.attackCooldown = Humanizer.attackDelayTicks();
-            context.canAttack = false;
-            return;
-        }
-
-        // All conditions met: execute attack via standard click
-        // This triggers the same client-side pipeline as a real player
-        float yawError = angleToTarget(self, target);
-        boolean visible = self.canEntityBeSeen(target);
-
-        if (distance <= WanderBotSettings.combatRange && visible && yawError <= 35F) {
-            // Humanization: apply slight aim error before attacking
-            float aimError = Humanizer.aimErrorDegrees();
-            self.rotationYaw += aimError;
-            self.rotationYawHead = self.rotationYaw;
-
-            // Use existing movement controller for legitimate attack
-            movement.attack(false);
-            movement.clickAttack(target);
-
-            // Humanization: variable attack cooldown (5-8 ticks)
-            context.attackCooldown = Humanizer.attackDelayTicks();
-            context.canAttack = false;
-        }
-    }
 
     private boolean canAttack(EntityPlayerSP self, EntityPlayer target, double distance) {
         if (target == null || target.isDead || target.getHealth() <= 0F) return false;
