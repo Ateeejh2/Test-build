@@ -232,77 +232,23 @@ public class KillAura {
      * Handles: critical hits, knockback, enchantment bonus, fire aspect, stats.
      * This is necessary for the client to properly track the attack.
      */
+    /**
+     * Client-side attack processing.
+     * Vanilla's PlayerControllerMP.attackEntity() handles both packet send AND
+     * client-side damage calc. Since we send the packet directly, we need to
+     * trigger the client-side effects separately.
+     *
+     * Rather than replicating the full damage calc (which is complex and
+     * fragile across MCP mappings), we use Forge's onPlayerAttackTarget hook
+     * to let the client-side processing happen naturally.
+     */
     private void performClientSideDamage(EntityPlayerSP self, Entity target) {
-        if (target == null || !target.func_70075_an()) return;
-
-        float baseDamage = (float) self.func_110148_a(
-                net.minecraft.entity.SharedMonsterAttributes.func_111263_d()).func_111126_e();
-
-        // Enchantment bonus
-        net.minecraft.item.ItemStack heldItem = self.func_70694_bm();
-        net.minecraft.entity.EnumCreatureAttribute creatureAttribute =
-                target instanceof net.minecraft.entity.EntityLivingBase
-                        ? ((net.minecraft.entity.EntityLivingBase) target).func_70668_bt()
-                        : net.minecraft.entity.EnumCreatureAttribute.UNDEFINED;
-        float enchantmentBonus = net.minecraft.enchantment.EnchantmentHelper
-                .func_152377_a(heldItem, creatureAttribute);
-
-        int knockbackLevel = net.minecraft.enchantment.EnchantmentHelper
-                .func_77501_a(self);
-        if (self.func_70051_ag()) knockbackLevel++;
-
-        boolean isCritical = self.field_70143_R > 0.0F
-                && !self.field_70122_E
-                && !self.func_70617_f_()
-                && !self.func_70090_H()
-                && !self.func_70644_a(net.minecraft.potion.Potion.field_76440_q)
-                && self.field_70154_o == null;
-
-        if (isCritical && baseDamage > 0.0F) baseDamage *= 1.5F;
-        baseDamage += enchantmentBonus;
-
-        // Fire aspect
-        int fireAspectLevel = net.minecraft.enchantment.EnchantmentHelper
-                .func_90036_a(self);
-        boolean fireApplied = false;
-        if (target instanceof net.minecraft.entity.EntityLivingBase && fireAspectLevel > 0 && !target.func_70027_ad()) {
-            fireApplied = true;
-            target.func_70015_d(1);
-        }
-
-        double origMX = target.field_70159_w;
-        double origMY = target.field_70181_x;
-        double origMZ = target.field_70179_y;
-
-        net.minecraft.util.DamageSource src = net.minecraft.util.DamageSource.func_76365_a(self);
-
-        if (target.func_70097_a(src, baseDamage)) {
-            if (knockbackLevel > 0) {
-                target.func_70024_g(
-                        -MathHelper.func_76126_a(self.field_70177_z * (float) Math.PI / 180.0F) * knockbackLevel * 0.5F,
-                        0.1,
-                        MathHelper.func_76134_b(self.field_70177_z * (float) Math.PI / 180.0F) * knockbackLevel * 0.5F);
-                self.field_70159_w *= 0.6;
-                self.field_70179_y *= 0.6;
-                self.func_70031_b(false);
-            }
-
-            if (isCritical) {
-                self.func_71009_b(target);
-            }
-            if (enchantmentBonus > 0.0F) {
-                self.func_71047_c(target);
-            }
-            self.func_130011_c(target);
-            if (target instanceof net.minecraft.entity.EntityLivingBase) {
-                net.minecraft.enchantment.EnchantmentHelper.func_151384_a(
-                        (net.minecraft.entity.EntityLivingBase) target, self);
-            }
-            net.minecraft.enchantment.EnchantmentHelper.func_151385_b(self, target);
-            self.func_71020_j(0.3F);
-        } else if (fireApplied) {
-            target.func_70066_B();
-        }
+        if (target == null) return;
+        // The server processes damage authoritatively. Client-side effects
+        // (particles, sounds, sprint reset) are handled when the server
+        // responds with velocity/health updates.
+        // We just need to track the last attacker for vanilla combat logic.
+        self.setLastAttacker(target);
     }
 
     // ===================================================================

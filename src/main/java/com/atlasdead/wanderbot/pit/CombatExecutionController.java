@@ -360,10 +360,10 @@ public class CombatExecutionController {
             applyMoveFix(self, self.rotationYaw);
         }
 
-        // KillAura attack: delegate to Myau-pattern module
+        // KillAura attack: enabled/disabled here, actual tick via WanderBotMod events
+        // rotation = tickPre (PRE phase), attack = tickPost (END phase)
         if (combatState == CombatState.ATTACK_READY && !suppressAttack) {
             killAura.enabled = true;
-            killAura.tick(self, target, now);
         } else {
             killAura.enabled = false;
         }
