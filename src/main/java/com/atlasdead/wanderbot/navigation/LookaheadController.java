@@ -6,67 +6,53 @@ import net.minecraft.client.entity.EntityPlayerSP;
 
 import java.util.List;
 
+/**
+ * Produces the exact world-space steering point used by normal navigation.
+ * The renderer already displays PathNode positions, so navigation follows the
+ * active waypoint directly instead of steering toward a separate lookahead or
+ * velocity-predicted point.
+ */
 public class LookaheadController {
     public Steering compute(EntityPlayerSP player, Path path, boolean narrow) {
         List<PathNode> nodes = path.getNodes();
         int index = path.getIndex();
-        if (index >= nodes.size()) return new Steering(player.posX, player.posY + player.getEyeHeight(), player.posZ, 0.0D, 0.0D, 0.0D);
+        if (index >= nodes.size()) {
+            return new Steering(player.posX, player.posY + player.getEyeHeight(), player.posZ,
+                    0.0D, 0.0D, 0.0D);
+        }
 
-        double speed = Math.sqrt(player.motionX * player.motionX + player.motionZ * player.motionZ);
-        double look = narrow ? 1.55D : Math.min(5.2D, 2.2D + speed * 15.0D);
-        if (!player.onGround) look *= 0.72D;
+        PathNode current = nodes.get(index);
+        double x = current.x + 0.5D;
+        double z = current.z + 0.5D;
+        double y = current.y + 1.0D;
 
-        PathNode anchor = nodes.get(index);
-        double x = anchor.x + 0.5D;
-        double z = anchor.z + 0.5D;
-        double y = anchor.y + 1.0D;
-        double travelled = 0.0D;
-        double lastDx = 0.0D;
-        double lastDz = 0.0D;
-
-        for (int i = index; i < Math.min(nodes.size() - 1, index + 10); i++) {
-            PathNode a = nodes.get(i);
-            PathNode b = nodes.get(i + 1);
-            double dx = b.x - a.x;
-            double dz = b.z - a.z;
+        double dirX = 0.0D;
+        double dirZ = 0.0D;
+        if (index + 1 < nodes.size()) {
+            PathNode next = nodes.get(index + 1);
+            double dx = next.x - current.x;
+            double dz = next.z - current.z;
             double len = Math.sqrt(dx * dx + dz * dz);
-            if (len < 0.001D) continue;
-            double nx = dx / len;
-            double nz = dz / len;
-
-            if (lastDx != 0.0D || lastDz != 0.0D) {
-                double dot = lastDx * nx + lastDz * nz;
-                if (dot < 0.25D) {
-                    look = Math.min(look, Math.max(1.05D, travelled + 0.45D));
-                    break;
-                }
+            if (len > 0.001D) {
+                dirX = dx / len;
+                dirZ = dz / len;
             }
-
-            if (travelled + len >= look) {
-                double t = (look - travelled) / len;
-                x = a.x + 0.5D + dx * t;
-                z = a.z + 0.5D + dz * t;
-                y = a.y + 1.0D;
-                lastDx = nx;
-                lastDz = nz;
-                break;
+        } else {
+            double dx = x - player.posX;
+            double dz = z - player.posZ;
+            double len = Math.sqrt(dx * dx + dz * dz);
+            if (len > 0.001D) {
+                dirX = dx / len;
+                dirZ = dz / len;
             }
-            travelled += len;
-            x = b.x + 0.5D;
-            z = b.z + 0.5D;
-            y = b.y + 1.0D;
-            lastDx = nx;
-            lastDz = nz;
         }
 
-        // Velocity prediction prevents late turning while sprinting.
-        double velocityBlend = Math.min(0.75D, speed * 8.0D);
-        if (speed > 0.03D) {
-            x += (player.motionX / speed) * velocityBlend;
-            z += (player.motionZ / speed) * velocityBlend;
-        }
-
-        return new Steering(x, y, z, lastDx, lastDz, look);
+        // Keep the value meaningful for existing sprint logic without creating
+        // another spatial target: report distance to the actual active node.
+        double dx = x - player.posX;
+        double dz = z - player.posZ;
+        double distance = Math.sqrt(dx * dx + dz * dz);
+        return new Steering(x, y, z, dirX, dirZ, distance);
     }
 
     public static class Steering {
