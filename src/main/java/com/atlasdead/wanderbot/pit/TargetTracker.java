@@ -14,15 +14,15 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Target ranking for the user's private Pit test environment.
+ * Target selection for the Pit combat layer.
  *
  * Hard eligibility rules:
  *  - at least one iron or chainmail armor piece
  *  - any diamond armor piece excludes the player
  *  - non-combat/invalid players are excluded
  *
- * Ranking then considers armor composition, health, distance, line of sight,
- * vertical separation, local crowd pressure and target stickiness.
+ * Among eligible players, the nearest player is selected. CombatPathFinder
+ * then owns locomotion toward that moving target and stops at attack range.
  */
 public class TargetTracker {
     private final TargetScanCache scanCache = new TargetScanCache();
@@ -42,9 +42,12 @@ public class TargetTracker {
 
         final long nowMs = System.currentTimeMillis();
         EntityPlayer cached = scanCache.get(world, self, maxRange, nowMs, 70L);
-        if (cached != null) {
+        if (cached != null && isValidCandidate(cached, self)
+                && (zones == null || !zones.isPlayerProtected(cached))
+                && self.getDistanceToEntity(cached) <= maxRange) {
             target = cached;
             targetArmor = armorProfile(cached);
+            targetScore = score(world, self, cached, maxRange);
             return cached;
         }
 
@@ -55,70 +58,49 @@ public class TargetTracker {
         for (EntityPlayer candidate : players) {
             if (!isValidCandidate(candidate, self)) continue;
             if (zones != null && zones.isPlayerProtected(candidate)) continue;
+            if (!isEligiblePitArmor(candidate)) continue;
 
             double distance = self.getDistanceToEntity(candidate);
             if (distance > maxRange) continue;
             candidates.add(candidate);
         }
 
-        final java.util.Map<Integer, Double> scoreCache = new java.util.HashMap<Integer, Double>();
-        for (EntityPlayer candidate : candidates) {
-            double value = score(world, self, candidate, maxRange);
-            if (strategy != null) value = strategy.targetScoreWithStrategy(world, self, candidate, value);
-            scoreCache.put(candidate.getEntityId(), value);
-        }
-        candidates.sort(new Comparator<EntityPlayer>() {
-            @Override
-            public int compare(EntityPlayer a, EntityPlayer b) {
-                return Double.compare(scoreCache.get(b.getEntityId()), scoreCache.get(a.getEntityId()));
-            }
-        });
-
         if (candidates.isEmpty()) {
             clear();
             return null;
         }
 
-        EntityPlayer best = candidates.get(0);
-        double bestScore = strategy == null ? score(world, self, best, maxRange) : strategy.targetScoreWithStrategy(world, self, best, score(world, self, best, maxRange));
-
-        // Target stickiness: do not swap targets for tiny score differences.
-        // This prevents oscillation when two eligible players are similarly ranked.
-        if (target != null && candidates.contains(target)) {
-            double lockedScore = strategy == null ? score(world, self, target, maxRange) : strategy.targetScoreWithStrategy(world, self, target, score(world, self, target, maxRange));
-            if (target != best && lockedScore + 12.0D >= bestScore) {
-                best = target;
-                bestScore = lockedScore;
+        // Primary selection rule: nearest eligible target.
+        candidates.sort(new Comparator<EntityPlayer>() {
+            @Override
+            public int compare(EntityPlayer a, EntityPlayer b) {
+                return Double.compare(self.getDistanceToEntity(a), self.getDistanceToEntity(b));
             }
-        }
+        });
 
-        target = best;
-        targetScore = bestScore;
-        targetArmor = armorProfile(best);
-        scanCache.put(world, self, maxRange, nowMs, best);
-        return best;
+        EntityPlayer nearest = candidates.get(0);
+        target = nearest;
+        targetScore = score(world, self, nearest, maxRange);
+        targetArmor = armorProfile(nearest);
+        scanCache.put(world, self, maxRange, nowMs, nearest);
+        return nearest;
     }
 
     private boolean isValidCandidate(EntityPlayer candidate, EntityPlayerSP self) {
         if (candidate == null || candidate == self || candidate.isDead) return false;
         if (candidate.isInvisible()) return false;
-        return candidate.getHealth() > 0.0F;
+        if (candidate.getHealth() <= 0.0F) return false;
+        if (candidate.capabilities != null && candidate.capabilities.isCreativeMode) return false;
+        return true;
     }
 
-    /**
-     * Returns true when the player matches the private Pit target policy.
-     *
-     * Eligible:
-     * - at least one iron or chainmail slot
-     * - zero diamond slots
-     *
-     * Leather-only, gold-only, naked and unrelated armor combinations are ignored.
-     */
+    /** Returns true when the player matches the Pit target armor policy. */
     public boolean isEligibleForStrategy(EntityPlayer player) {
         return isEligiblePitArmor(player);
     }
 
     private boolean isEligiblePitArmor(EntityPlayer player) {
+        if (player == null) return false;
         ArmorProfile profile = armorProfile(player);
         return profile.hasIronOrChain && !profile.hasDiamond;
     }
@@ -165,40 +147,21 @@ public class TargetTracker {
         double maxHealth = Math.max(1.0F, p.getMaxHealth());
         double healthRatio = health / maxHealth;
 
-        // Lower distance is better, but distance is deliberately not dominant.
         double score = 0.0D;
         score += 38.0D * (1.0D - clamp01(distance / Math.max(1.0D, maxRange)));
-
-        // Lower current health is a useful opportunity signal while still
-        // retaining a meaningful distance/visibility contribution.
         score += 26.0D * (1.0D - healthRatio);
-
-        // Armor composition: chain is slightly preferred as the easier eligible
-        // armor class; iron remains fully eligible and competitive.
         score += armor.chainPieces * 7.0D;
         score += armor.ironPieces * 4.0D;
         score += Math.max(0, 4 - armor.eligiblePieces) * 1.5D;
-
-        // Clear sight is strongly preferred; blocked targets remain selectable so
-        // the Navigation Core can route around the obstruction.
         score += self.canEntityBeSeen(p) ? 24.0D : -10.0D;
 
-        // Small vertical differences are easier to maintain in combat.
         double vertical = Math.abs(self.posY - p.posY);
         score -= Math.min(10.0D, vertical * 2.5D);
 
-        // Crowd pressure: several nearby eligible players make an otherwise good
-        // target more dangerous to approach.
         int pressure = countEligiblePlayersNear(world, self, p, 6.0D);
         score -= pressure * 8.0D;
 
-        // Prefer targets that are not already extremely close to the bot's own
-        // position; that gives the controller a stable approach window.
         if (distance < 2.25D) score -= (2.25D - distance) * 6.0D;
-
-        // Stable target lock to reduce rapid target switching.
-        if (p == target) score += 14.0D;
-
         return score;
     }
 
@@ -221,9 +184,7 @@ public class TargetTracker {
     }
 
     public EntityPlayer getTarget() { return target; }
-
     public double getTargetScore() { return targetScore; }
-
     public ArmorProfile getTargetArmor() { return targetArmor; }
 
     public void clear() {
@@ -235,8 +196,8 @@ public class TargetTracker {
 
     public boolean isViable(EntityPlayerSP self, double maxRange) {
         return target != null
-                && !target.isDead
-                && target.getHealth() > 0.0F
+                && isValidCandidate(target, self)
+                && isEligiblePitArmor(target)
                 && self.getDistanceToEntity(target) <= maxRange;
     }
 
