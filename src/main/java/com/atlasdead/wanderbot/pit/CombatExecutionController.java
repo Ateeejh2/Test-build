@@ -450,10 +450,7 @@ public class CombatExecutionController {
                 // Myau sequence: swingItem FIRST
                 mc.thePlayer.swingItem();
 
-                // Sync current play item
-                mc.playerController.syncCurrentPlayItem();
-
-                // Send attack packet directly (like Myau's PacketUtil.sendPacket)
+                // Send attack packet (attackEntity handles sync internally)
                 mc.playerController.attackEntity(mc.thePlayer, target);
 
                 // Set next attack delay (Myau pattern: 1000/CPS)
