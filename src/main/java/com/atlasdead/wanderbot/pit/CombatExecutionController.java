@@ -326,14 +326,23 @@ public class CombatExecutionController {
 
         if (inRange && visible && aligned && attackTimer == 0
                 && rotationAlignedTick >= ROTATION_MIN_DELAY) {
-            // Send an explicit rotation packet before the attack to ensure
-            // the server has the correct rotation when it processes the attack.
-            // This prevents Vulcan Bad Packets Type 7 (rotation mismatch)
-            // and Type H (attack without rotation) detections.
+            // Lock rotation to ensure C06 packet and attack packet use
+            // identical values. Vulcan Aim D checks that rotation is constant
+            // between position and attack packets.
+            float savedYaw = self.rotationYaw;
+            float savedPitch = self.rotationPitch;
+            self.rotationYaw = savedYaw;
+            self.rotationPitch = savedPitch;
+
+            // Send C06 (position+rotation) so server has the correct
+            // position and rotation before the attack arrives.
             sendRotationPacket(self);
-            // Trigger the real 1.8.9 left-click pipeline.
-            movement.attack(false);
-            movement.clickAttack(target);
+
+            // Send arm swing BEFORE attack (fixes Vulcan Type 7).
+            mc.thePlayer.swingItem();
+            // Send attack packet.
+            mc.playerController.attackEntity(mc.thePlayer, target);
+
             attackTimer = targetRetreating ? 5 : 6;
             rotationAlignedTick = 0;
         } else {
