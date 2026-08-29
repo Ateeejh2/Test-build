@@ -8,6 +8,7 @@ import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.network.play.client.C13PacketPlayerLook;
 import net.minecraft.util.MathHelper;
 
 /**
@@ -56,6 +57,13 @@ public class CombatExecutionController {
     private int jumpTimer;
     private long targetLockUntil;
     private int strafeSign = 1;
+    /**
+     * Minimum ticks that rotation must be aligned before an attack is sent.
+     * This ensures the rotation packet reaches the server before the attack
+     * packet, preventing Vulcan Bad Packets Type 7 / Type H detections.
+     */
+    private static final int ROTATION_MIN_DELAY = 2;
+    private int rotationAlignedTick;
     private final CombatTacticalModel tactical = new CombatTacticalModel();
     private final CombatNavigationController combatNavigation = new CombatNavigationController();
     private final CombatNavigationCoordinator combatCoordinator;
@@ -101,6 +109,7 @@ public class CombatExecutionController {
         attackTimer = 0;
         jumpTimer = 0;
         targetLockUntil = 0L;
+        rotationAlignedTick = 0;
         strafeSign = 1;
         tactical.reset();
         control.reset();
@@ -130,6 +139,50 @@ public class CombatExecutionController {
     private static double toLocalStrafe(EntityPlayerSP self, double routeX, double routeZ) {
         double yaw = Math.toRadians(self.rotationYaw);
         return routeX * Math.cos(yaw) + routeZ * Math.sin(yaw);
+    }
+
+    /**
+     * Send an explicit rotation packet to the server.
+     * Called before attack packets to ensure the server has the correct
+     * player rotation when processing the attack. Without this, the server
+     * may receive the attack with a stale rotation, triggering anti-cheat
+     * Bad Packets detections (Vulcan Type 7 / Type H).
+     *
+     * Uses reflection because Forge 1.8.9 API names for packet classes
+     * vary between MCP mappings and SRG names.
+     */
+    private void sendRotationPacket(EntityPlayerSP self) {
+        try {
+            // Get the sendQueue (NetworkManager) from EntityPlayerSP via reflection.
+            // In Forge 1.8.9 MCP, the field is named 'sendQueue' on EntityPlayerSP.
+            java.lang.reflect.Field queueField = self.getClass().getField("sendQueue");
+            Object queue = queueField.get(self);
+            if (queue == null) return;
+
+            // Create a C03PacketPlayer with rotation (no position change).
+            // The constructor varies by MCP mapping; use the 3-arg (yaw, pitch, onGround) variant.
+            Class<?> c03Class = Class.forName("net.minecraft.network.play.client.C03PacketPlayer");
+            java.lang.reflect.Constructor<?> ctor = c03Class.getConstructor(boolean.class);
+            Object packet = ctor.newInstance(false); // onGround=false (or use self.onGround)
+
+            // Set rotationYaw and rotationPitch on the packet via reflection.
+            java.lang.reflect.Field yawField = c03Class.getField("field_149479_a"); // rotationYaw SRG
+            java.lang.reflect.Field pitchField = c03Class.getField("field_149477_b"); // rotationPitch SRG
+            yawField.setFloat(packet, self.rotationYaw);
+            pitchField.setFloat(packet, self.rotationPitch);
+
+            // Also set the yaw/pitch changing flags so the server knows rotation was updated.
+            java.lang.reflect.Field rotatingField = c03Class.getField("field_149473_f"); // rotating SRG
+            rotatingField.setBoolean(packet, true);
+
+            // Send via NetworkManager.sendPacket()
+            java.lang.reflect.Method sendMethod = queue.getClass().getMethod("sendPacket",
+                    Class.forName("net.minecraft.network.Packet"));
+            sendMethod.invoke(queue, packet);
+        } catch (Exception ignored) {
+            // Fallback: rotation will be sent naturally via onUpdateWalkingPlayer.
+            // The rotationAlignedTick delay still provides protection.
+        }
     }
 
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
@@ -187,6 +240,15 @@ public class CombatExecutionController {
                 action == CombatDecisionEngine.Action.ATTACK || action == CombatDecisionEngine.Action.APPROACH);
         float yawError = aim.yawError;
         float pitchError = aim.pitchError;
+
+        // Track rotation alignment timing for anti-cheat compliance.
+        // Rotation must be stable for ROTATION_MIN_DELAY ticks before attack
+        // to ensure the server receives the rotation packet first.
+        if (aim.aligned) {
+            rotationAlignedTick++;
+        } else {
+            rotationAlignedTick = 0;
+        }
 
         CombatNavigationController.Result combatRoute = combatNavigation.compute(
                 mc.theWorld, self, target, tacticalState, distance);
@@ -260,11 +322,18 @@ public class CombatExecutionController {
             jumpTimer = 10;
         }
 
-        if (inRange && visible && aligned && attackTimer == 0) {
-            // Explicitly trigger the real 1.8.9 left-click pipeline.
+        if (inRange && visible && aligned && attackTimer == 0
+                && rotationAlignedTick >= ROTATION_MIN_DELAY) {
+            // Send an explicit rotation packet before the attack to ensure
+            // the server has the correct rotation when it processes the attack.
+            // This prevents Vulcan Bad Packets Type 7 (rotation mismatch)
+            // and Type H (attack without rotation) detections.
+            sendRotationPacket(self);
+            // Trigger the real 1.8.9 left-click pipeline.
             movement.attack(false);
             movement.clickAttack(target);
             attackTimer = targetRetreating ? 5 : 6;
+            rotationAlignedTick = 0;
         } else {
             movement.attack(false);
         }
