@@ -49,7 +49,7 @@ public class WanderBotMod {
             Minecraft.getMinecraft().displayGuiScreen(new ClickGuiScreen());
         }
         // Lock all other keyboard input when bot is running
-        if (BOT != null && BOT.isActive() && Minecraft.getMinecraft().currentScreen == null) {
+        if (BOT != null && BOT.isEnabled() && Minecraft.getMinecraft().currentScreen == null) {
             int key = Keyboard.getEventKey();
             boolean isToggleKey = key == TOGGLE_KEY.getKeyCode();
             boolean isEscape = key == Keyboard.KEY_ESCAPE;
@@ -62,12 +62,8 @@ public class WanderBotMod {
 
     @SubscribeEvent
     public void onMouse(InputEvent.MouseInputEvent event) {
-        if (BOT != null && BOT.isActive() && Minecraft.getMinecraft().currentScreen == null) {
-            int button = Mouse.getEventButton();
-            // Block left click (attack), right click (use), and middle click
-            if (button >= 0 && button <= 2) {
-                event.setCanceled(true);
-            }
+        if (BOT != null && BOT.isEnabled() && Minecraft.getMinecraft().currentScreen == null) {
+            event.setCanceled(true);
         }
     }
 
