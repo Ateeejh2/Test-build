@@ -160,27 +160,22 @@ public class KillAura {
 
         if (canAttack) {
             // ============================================================
-            // MACRO-STYLE ATTACK — Simulate mouse click, not manual packets.
+            // ATTACK SEQUENCE — Direct but vanilla-matching.
             //
-            // We manually set mc.objectMouseOver to point at the target,
-            // then call mc.clickMouse() which is vanilla's left-click handler.
-            // This triggers the EXACT same code path as a real player clicking:
+            // vanilla clickMouse() order:
+            //   1. attackEntity()  → sends C02PacketUseEntity
+            //   2. swingItem()     → sets isSwinging = true
+            //   3. onUpdateWalkingPlayer() → sends C03 + C0A
             //
-            //   mc.clickMouse()
-            //     → checks objectMouseOver.entityHit
-            //     → swingItem()          (sets isSwinging = true)
-            //     → attackEntity()       (sends C02 + client-side effects)
-            //     → onUpdateWalkingPlayer() (sends C03 + C0A naturally)
-            //
-            // We must set objectMouseOver because tickPre() runs BEFORE
-            // vanilla's onUpdate(), so objectMouseOver still has last tick's value.
+            // We replicate steps 1-2 directly. Step 3 happens naturally
+            // when vanilla sends position/rotation packets.
             // ============================================================
 
-            // Set objectMouseOver to point at the target entity
-            updateObjectMouseOver(targetEntity);
+            // 1. Attack — sends C02 packet + client-side damage calc
+            mc.playerController.attackEntity(self, targetEntity);
 
-            // Trigger vanilla's clickMouse() — handles swing + attack + packets
-            clickMouse();
+            // 2. Swing — sets isSwinging so vanilla sends C0A in onUpdateWalkingPlayer
+            self.swingItem();
 
             // Set next attack delay (ms-based like Myau)
             attackDelayMS += getAttackDelay();
@@ -208,61 +203,6 @@ public class KillAura {
     // No manual packet sending needed — attackEntity() handles C02,
     // and vanilla's onUpdateWalkingPlayer() handles C0A + C03.
     // This avoids duplicate swing packets that trigger Vulcan detections.
-
-    // ===================================================================
-    // MACRO HELPERS — ObjectMouseOver + clickMouse via reflection
-    // ===================================================================
-
-    /**
-     * Update mc.objectMouseOver to point at the target entity.
-     * This is necessary because tickPre() runs BEFORE vanilla's onUpdate(),
-     * so objectMouseOver still has last tick's value (might be null or wrong entity).
-     * We create a MovingObjectPosition that points at the target's bounding box center.
-     */
-    private void updateObjectMouseOver(EntityPlayer targetEntity) {
-        // Create a MovingObjectPosition pointing at the target entity.
-        // clickMouse() checks objectMouseOver.entityHit to decide what to attack.
-        Vec3 targetVec = new Vec3(targetEntity.posX, targetEntity.posY + targetEntity.getEyeHeight(), targetEntity.posZ);
-        net.minecraft.util.BlockPos targetPos = new net.minecraft.util.BlockPos(targetEntity);
-        mc.objectMouseOver = new net.minecraft.util.MovingObjectPosition(
-                targetVec,
-                net.minecraft.util.EnumFacing.UP,
-                targetPos
-        );
-        mc.objectMouseOver.entityHit = targetEntity;
-        mc.objectMouseOver.typeOfHit = net.minecraft.util.MovingObjectPosition.MovingObjectType.ENTITY;
-    }
-
-    /**
-     * Simulate a left mouse click by calling mc.clickMouse() via reflection.
-     * This is the same method vanilla calls when you press the attack button.
-     * It handles swingItem(), attackEntity(), and all client-side effects
-     * exactly as a real player click would.
-     *
-     * Using reflection because clickMouse() is private in Minecraft 1.8.9.
-     * The Method object is cached after the first call for performance.
-     */
-    private static java.lang.reflect.Method clickMouseMethod;
-    private static boolean clickMouseFailed = false;
-
-    private void clickMouse() {
-        try {
-            if (clickMouseMethod == null && !clickMouseFailed) {
-                clickMouseMethod = Minecraft.class.getDeclaredMethod("clickMouse");
-                clickMouseMethod.setAccessible(true);
-            }
-            if (clickMouseMethod != null) {
-                clickMouseMethod.invoke(mc);
-            }
-        } catch (Exception e) {
-            clickMouseFailed = true;
-            // Fallback: use playerController.attackEntity() directly
-            // This is less ideal but still works
-            mc.playerController.attackEntity(
-                    mc.thePlayer,
-                    mc.objectMouseOver.entityHit);
-        }
-    }
 
     // ===================================================================
     // UTILITY — Matches Myau's RotationUtil methods
