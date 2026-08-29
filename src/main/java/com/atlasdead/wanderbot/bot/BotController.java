@@ -41,6 +41,7 @@ public class BotController {
     private BotState state = BotState.OFF;
     private boolean killAuraActive;
     private int killAuraChatCooldown;
+    private long lastDeathRestartMs;
 
     public BotController(Minecraft mc) {
         this.mc = mc;
@@ -69,6 +70,7 @@ public class BotController {
         startupSequence.reset();
         killAuraActive = false;
         killAuraChatCooldown = 0;
+        lastDeathRestartMs = 0L;
         movement.release();
         movement.releaseJump();
         movement.attack(false);
@@ -83,6 +85,37 @@ public class BotController {
         movement.releaseJump();
         movement.attack(false);
         ensureKillAuraOff();
+    }
+
+    /**
+     * Called by the chat listener when the server reports a death.
+     * The complete bot lifecycle is restarted from the same startup sequence
+     * used after a manual bot start.
+     */
+    public void handleDeathMessage() {
+        if (state == BotState.OFF || mc.theWorld == null || mc.thePlayer == null) return;
+
+        long now = System.currentTimeMillis();
+        if (now - lastDeathRestartMs < 1000L) return;
+        lastDeathRestartMs = now;
+
+        // Always issue the requested KillAura OFF command on death, even if the
+        // local state already says it is off.
+        sendKillAuraCommand(false);
+        killAuraActive = false;
+        killAuraChatCooldown = 10;
+
+        movement.release();
+        movement.releaseJump();
+        movement.attack(false);
+
+        pit.getTargets().clear();
+        runtimeGuard.reset();
+        combatExecutor.reset();
+        combatPhaseController.reset();
+        startupSequence.reset();
+        pit.start();
+        state = BotState.PLANNING;
     }
 
     public void tick() {
@@ -182,13 +215,13 @@ public class BotController {
         combatExecutor.bindMegastreakProfile(pit.getStreakControl().getActiveMegastreak());
         updateKillAura(player, target);
 
-        CombatExecutionController.State combatState = combatExecutor.tick(
+        combatExecutor.tick(
                 player,
                 target,
                 CombatDecisionEngine.Action.ATTACK,
                 System.currentTimeMillis());
 
-        state = combatState == null ? BotState.WALKING : BotState.WALKING;
+        state = BotState.WALKING;
     }
 
     public void onDisconnect() {
