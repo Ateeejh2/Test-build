@@ -1,6 +1,0 @@
-Combat v8
-- Adds CombatNavigationCoordinator as the bridge between tactical combat positioning and the existing Navigation Core.
-- Rebuilds combat goals when the target moves materially, crowd pressure changes, or the current objective becomes stale.
-- Handles route failures as combat events and can rebuild either a direct combat position or a cutoff position.
-- Keeps movement execution in the existing client movement layer; coordinator only supplies objectives and recovery requests.
-- No packet injection or anti-cheat bypass logic.
