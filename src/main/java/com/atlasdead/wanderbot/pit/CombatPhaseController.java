@@ -230,20 +230,8 @@ public final class CombatPhaseController {
             return TickResult.handled();
         }
 
-        // Humanization: sprint toggle during combat approach
-        if (dist > 2.0D) {
-            boolean wantSprint = rotation.shouldSprint(self.isSprinting());
-            movement.sprint(wantSprint);
-        } else {
-            movement.sprint(false); // Stop sprinting at close range
-        }
-
-        // Humanization: random strafing during combat approach
-        if (dist > 1.5D && dist < 8.0D && Humanizer.shouldStrafe()) {
-            movement.sprint(false); // Stop sprint to strafe
-        }
-
         // Execute via existing CombatExecutionController (single attack path)
+        // NOTE: sprint is set inside executor.tick() -> executeApproach/executeAttack()
         // NOTE: do NOT also call checkAndExecuteAttack() here — it sends
         // a second clickAttack() per tick, causing CPS that triggers WatchDog.
         executor.tick(self, target, action, System.currentTimeMillis());

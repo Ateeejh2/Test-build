@@ -154,6 +154,7 @@ public class BotController {
         if (replanCooldown > 0) replanCooldown--;
         if (jumpCooldown > 0) jumpCooldown--;
         if (attackCooldown > 0) attackCooldown--;
+        movement.release();
         movement.releaseJump();
         movement.attack(false);
 

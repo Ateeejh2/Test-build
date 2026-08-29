@@ -67,6 +67,9 @@ public class CombatExecutionController {
     private MegastreakProfileEngine.Profile megastreakProfile;
     private CombatControlModel control;
 
+    /** Debug output for HUD: last computed local-space movement values. */
+    public static String combatDebug = "";
+
     public CombatExecutionController(Minecraft mc, MovementController movement, RotationController rotation) {
         this.mc = mc;
         this.movement = movement;
@@ -109,9 +112,30 @@ public class CombatExecutionController {
         megastreakProfile = null;
     }
 
+    /**
+     * Convert a world-space movement vector (routeX, routeZ) into the player's
+     * local forward/strafe components using the player's current rotationYaw.
+     *
+     * Minecraft 1.8.9 conventions:
+     *   yaw=0 → facing South (+Z)
+     *   yaw=90 → facing West (-X)
+     *   forward world vector = (-sin(yaw), cos(yaw))
+     *   right world vector   = ( cos(yaw), sin(yaw))
+     */
+    private static double toLocalForward(EntityPlayerSP self, double routeX, double routeZ) {
+        double yaw = Math.toRadians(self.rotationYaw);
+        return routeX * (-Math.sin(yaw)) + routeZ * Math.cos(yaw);
+    }
+
+    private static double toLocalStrafe(EntityPlayerSP self, double routeX, double routeZ) {
+        double yaw = Math.toRadians(self.rotationYaw);
+        return routeX * Math.cos(yaw) + routeZ * Math.sin(yaw);
+    }
+
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
         if (self == null || target == null || action == null) {
             movement.release();
+            combatDebug = "";
             return publishState(new State("IDLE", 0.0D, 180.0F, 90.0F, false, false));
         }
 
@@ -214,15 +238,21 @@ public class CombatExecutionController {
         boolean tooClose = distance < tacticalState.preferredDistance - 0.45D;
         boolean targetRetreating = tacticalState.targetRetreating;
 
+        // Convert world-space route to local-space for forward/backward
+        double localFwd = toLocalForward(self, route.x, route.z);
+        double localStr = toLocalStrafe(self, route.x, route.z);
+
         // Preserve a controllable melee gap instead of constantly colliding with
         // the target. Strafing becomes stronger while the target retreats.
         boolean moveForward = distance > tacticalState.preferredDistance + 0.15D;
         if (tooClose) moveForward = false;
         moveForward = moveForward && route.distanceBias > -0.95D;
+        // Also require local forward component to be positive (target is ahead)
+        moveForward = moveForward && localFwd > -0.15D;
         movement.forward(moveForward);
         double aggression = megastreakProfile == null ? 0.55D : megastreakProfile.targetAggression;
         float strafeAmount = tooClose ? 0.65F : (targetRetreating ? 0.58F : (float)(0.35D + aggression * 0.20D));
-        float routeStrafe = (float)(route.z * 0.45D + strafe * strafeAmount);
+        float routeStrafe = (float)(localStr * 0.45D + strafe * strafeAmount);
         movement.strafe(routeStrafe);
         movement.sprint(false);
 
@@ -239,26 +269,39 @@ public class CombatExecutionController {
         } else {
             movement.attack(false);
         }
+
+        // Debug: log conversion for HUD
+        combatDebug = String.format("ATK route=(%.2f,%.2f) yaw=%.0f localFwd=%.2f localStr=%.2f",
+                route.x, route.z, self.rotationYaw, localFwd, localStr);
     }
 
     private void executeApproach(EntityPlayerSP self, EntityPlayer target, double distance,
                                  boolean visible, float yawError,
                                  CombatTacticalModel.State tacticalState,
                                  CombatNavigationController.Result route) {
+        // Convert world-space route vector to local-space forward/strafe
+        double localFwd = toLocalForward(self, route.x, route.z);
+        double localStr = toLocalStrafe(self, route.x, route.z);
+
         if (visible && distance < 5.0D) {
             float strafe = tacticalState.strafeSign;
             boolean tooClose = distance < tacticalState.preferredDistance - 0.55D;
-            movement.forward(route.x > 0.05D && !tooClose);
-            movement.backward(route.x < -0.25D);
-            movement.strafe((float)(route.z * 0.60D + strafe * (tooClose ? 0.45F : 0.30F)));
+            movement.forward(localFwd > 0.05D && !tooClose);
+            movement.backward(localFwd < -0.25D);
+            movement.strafe((float)(localStr * 0.60D + strafe * (tooClose ? 0.45F : 0.30F)));
             movement.sprint(self.onGround && yawError < 24.0F && distance > tacticalState.preferredDistance);
         } else {
-            movement.forward(route.x > -0.10D);
-            movement.backward(route.x < -0.35D);
-            movement.strafe((float)(route.z * 0.55D));
+            movement.forward(localFwd > -0.10D);
+            movement.backward(localFwd < -0.35D);
+            movement.strafe((float)(localStr * 0.55D));
             movement.sprint(self.onGround && yawError < 20.0F);
         }
         movement.attack(false);
+
+        // Debug: log conversion for HUD
+        combatDebug = String.format("route=(%.2f,%.2f) yaw=%.0f localFwd=%.2f localStr=%.2f fwd=%s bk=%s str=%.2f",
+                route.x, route.z, self.rotationYaw, localFwd, localStr,
+                localFwd > 0.05D, localFwd < -0.25D, localStr);
     }
 
     private boolean shouldCombatJump(EntityPlayerSP self, EntityPlayer target, double distance,
