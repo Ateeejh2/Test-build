@@ -10,6 +10,7 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.BlockPos;
 import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 
@@ -153,6 +154,26 @@ public class CombatExecutionController {
     private static double toLocalStrafe(EntityPlayerSP self, double routeX, double routeZ) {
         double yaw = Math.toRadians(self.rotationYaw);
         return routeX * Math.cos(yaw) + routeZ * Math.sin(yaw);
+    }
+
+    /**
+     * Create a MovingObjectPosition pointing at the target's bounding box center.
+     * Used to set mc.objectMouseOver before calling mc.clickMouse().
+     * This makes clickMouse() treat the click as hitting the target entity.
+     */
+    private static MovingObjectPosition createAttackMOP(EntityPlayerSP self, EntityPlayer target) {
+        double borderSize = target.getCollisionBorderSize();
+        AxisAlignedBB box = target.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
+        double eyeY = self.posY + self.getEyeHeight();
+        Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
+        // Aim at box center
+        Vec3 center = new Vec3(
+                (box.minX + box.maxX) / 2.0D,
+                (box.minY + box.maxY) / 2.0D,
+                (box.minZ + box.maxZ) / 2.0D);
+        // Return entity hit with blockPosition set to target's feet for entity type
+        BlockPos blockPos = new BlockPos(target.posX, target.posY, target.posZ);
+        return new MovingObjectPosition(blockPos, net.minecraft.util.EnumFacing.UP, target);
     }
 
 
@@ -327,12 +348,24 @@ public class CombatExecutionController {
             applyMoveFix(self, self.rotationYaw);
         }
 
-        // Direct attack: set rotation + press attack button
-        // rotation is already set by aimController.update() above
-        // movement.attack(true) simulates a mouse click — vanilla handles packets
-        if (combatState == CombatState.ATTACK_READY && !suppressAttack) {
-            movement.attack(true);
-            attackTimer = 8; // cooldown ticks before next attack
+        // Direct attack: use mc.clickMouse() for vanilla-exact behavior.
+        // We set objectMouseOver to point at the target first, then call clickMouse().
+        // clickMouse() handles C02, swing, damage calc, rightClickDelayTimer —
+        // everything a real player left-click does. Zero manual packets.
+        if (combatState == CombatState.ATTACK_READY && !suppressAttack
+                && attackTimer == 0 && attackDelayMS <= 0L) {
+            // Temporarily override objectMouseOver so clickMouse() targets the enemy
+            MovingObjectPosition savedMOP = mc.objectMouseOver;
+            try {
+                mc.objectMouseOver = createAttackMOP(self, target);
+                // Reset rightClickDelayTimer so clickMouse() actually fires
+                mc.rightClickDelayTimer = 0;
+                mc.clickMouse();
+            } finally {
+                mc.objectMouseOver = savedMOP;
+            }
+            attackTimer = 8;
+            attackDelayMS = getAttackDelayMS();
         }
 
         CombatTelemetry previous = telemetry;
