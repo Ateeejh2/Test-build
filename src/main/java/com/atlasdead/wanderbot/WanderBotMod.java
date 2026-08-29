@@ -87,6 +87,14 @@ public class WanderBotMod {
         } else if ("[Myau] KillAura: OFF".equals(plain)) {
             BOT.applyKillAuraStateFromMessage(false);
         }
+
+        // Server death notification. <level> and <ign> are variable, so only
+        // the fixed message structure is matched. On death, reset the entire
+        // bot lifecycle so the next tick starts from the normal startup path.
+        String deathText = plain == null ? "" : plain.trim();
+        if (deathText.matches("DEATH! by \\[[^\\]]+\\] \\S+ VIEW RECAP")) {
+            BOT.handleDeathMessage();
+        }
     }
 
     @SubscribeEvent
