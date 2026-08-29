@@ -8,7 +8,6 @@ import com.atlasdead.wanderbot.navigation.TerrainAnalyzer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.network.play.client.C13PacketPlayerLook;
 import net.minecraft.util.MathHelper;
 
 /**
@@ -148,37 +147,39 @@ public class CombatExecutionController {
      * may receive the attack with a stale rotation, triggering anti-cheat
      * Bad Packets detections (Vulcan Type 7 / Type H).
      *
-     * Uses reflection because Forge 1.8.9 API names for packet classes
-     * vary between MCP mappings and SRG names.
+     * Uses reflection because the packet field names are SRG-mapped at runtime
+     * but MCP-named at compile time. ForgeGradle remaps at build, but the
+     * source must use MCP names.
      */
     private void sendRotationPacket(EntityPlayerSP self) {
         try {
-            // Get the sendQueue (NetworkManager) from EntityPlayerSP via reflection.
-            // In Forge 1.8.9 MCP, the field is named 'sendQueue' on EntityPlayerSP.
-            java.lang.reflect.Field queueField = self.getClass().getField("sendQueue");
-            Object queue = queueField.get(self);
-            if (queue == null) return;
+            // Access the NetworkManager via the connection field on EntityPlayerSP.
+            java.lang.reflect.Field connField = self.getClass().getField("connection");
+            Object conn = connField.get(self);
+            if (conn == null) return;
 
-            // Create a C03PacketPlayer with rotation (no position change).
-            // The constructor varies by MCP mapping; use the 3-arg (yaw, pitch, onGround) variant.
+            // Get the NetworkManager from the connection (NetHandlerPlayClient).
+            java.lang.reflect.Field nmField = conn.getClass().getField("netManager");
+            Object nm = nmField.get(conn);
+            if (nm == null) return;
+
+            // Create a C03PacketPlayer with rotation flag set.
             Class<?> c03Class = Class.forName("net.minecraft.network.play.client.C03PacketPlayer");
             java.lang.reflect.Constructor<?> ctor = c03Class.getConstructor(boolean.class);
-            Object packet = ctor.newInstance(false); // onGround=false (or use self.onGround)
+            Object packet = ctor.newInstance(self.onGround);
 
-            // Set rotationYaw and rotationPitch on the packet via reflection.
-            java.lang.reflect.Field yawField = c03Class.getField("field_149479_a"); // rotationYaw SRG
-            java.lang.reflect.Field pitchField = c03Class.getField("field_149477_b"); // rotationPitch SRG
+            // Set rotation fields (MCP names, remapped by ForgeGradle).
+            java.lang.reflect.Field yawField = c03Class.getField("rotationYaw");
+            java.lang.reflect.Field pitchField = c03Class.getField("rotationPitch");
+            java.lang.reflect.Field rotatingField = c03Class.getField("rotating");
             yawField.setFloat(packet, self.rotationYaw);
             pitchField.setFloat(packet, self.rotationPitch);
-
-            // Also set the yaw/pitch changing flags so the server knows rotation was updated.
-            java.lang.reflect.Field rotatingField = c03Class.getField("field_149473_f"); // rotating SRG
             rotatingField.setBoolean(packet, true);
 
             // Send via NetworkManager.sendPacket()
-            java.lang.reflect.Method sendMethod = queue.getClass().getMethod("sendPacket",
+            java.lang.reflect.Method sendMethod = nm.getClass().getMethod("sendPacket",
                     Class.forName("net.minecraft.network.Packet"));
-            sendMethod.invoke(queue, packet);
+            sendMethod.invoke(nm, packet);
         } catch (Exception ignored) {
             // Fallback: rotation will be sent naturally via onUpdateWalkingPlayer.
             // The rotationAlignedTick delay still provides protection.
