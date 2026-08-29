@@ -234,7 +234,7 @@ public class CombatExecutionController {
         if (inRange && visible && aligned && attackTimer == 0) {
             // Explicitly trigger the real 1.8.9 left-click pipeline.
             movement.attack(false);
-            movement.clickAttack();
+            movement.clickAttack(target);
             attackTimer = targetRetreating ? 5 : 6;
         } else {
             movement.attack(false);

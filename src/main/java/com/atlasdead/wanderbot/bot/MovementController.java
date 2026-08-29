@@ -66,16 +66,17 @@ public class MovementController {
 
     /**
      * Performs the normal Minecraft 1.8.9 client-side attack action against
-     * the entity currently under the crosshair. This avoids depending on the
-     * private Minecraft.clickMouse() method while preserving the normal
-     * PlayerController attack pipeline.
+     * the given entity. Uses the same client-side pipeline as a real player
+     * pressing left-click: attackEntity() + swingItem().
+     *
+     * @param target The entity to attack. Must not be null.
      */
-    public void clickAttack() {
+    public void clickAttack(Entity target) {
         if (mc == null || mc.thePlayer == null || mc.playerController == null) return;
-        if (mc.objectMouseOver == null || mc.objectMouseOver.entityHit == null) return;
+        if (target == null) return;
 
-        Entity target = mc.objectMouseOver.entityHit;
         mc.playerController.attackEntity(mc.thePlayer, target);
+        mc.thePlayer.swingItem();
     }
 
     public void release() {

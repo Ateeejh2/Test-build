@@ -406,7 +406,7 @@ public class BotController {
         movement.sprint(false);
         if (distance <= 3.35D && yawError <= 30.0F && player.canEntityBeSeen(target) && attackCooldown == 0) {
             movement.attack(false);
-            movement.clickAttack();
+            movement.clickAttack(target);
             attackCooldown = 8 + random.nextInt(4);
         }
         path = null;

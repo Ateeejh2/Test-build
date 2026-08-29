@@ -503,7 +503,7 @@ public final class CombatPhaseController {
 
             // Use existing movement controller for legitimate attack
             movement.attack(false);
-            movement.clickAttack();
+            movement.clickAttack(target);
 
             // Humanization: variable attack cooldown (5-8 ticks)
             context.attackCooldown = Humanizer.attackDelayTicks();
