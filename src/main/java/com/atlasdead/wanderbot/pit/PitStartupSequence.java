@@ -3,10 +3,8 @@ package com.atlasdead.wanderbot.pit;
 import com.atlasdead.wanderbot.bot.MovementController;
 import com.atlasdead.wanderbot.pathfinding.Path;
 import com.atlasdead.wanderbot.pathfinding.PathFinder;
-import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
-import net.minecraft.init.Blocks;
 import net.minecraft.scoreboard.ScoreObjective;
 import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.util.BlockPos;
@@ -18,8 +16,7 @@ public final class PitStartupSequence {
 
     private static final int MID_X = -11;
     private static final int MID_Z = -13;
-    private static final int SLIME_SCAN_RADIUS = 16;
-    private static final int SLIME_SCAN_Y = 16;
+    private static final int GOAL_Y_SCAN = 12;
 
     private final Minecraft mc;
     private final MovementController movement;
@@ -46,6 +43,9 @@ public final class PitStartupSequence {
         goal = null;
         commandSentAt = 0L;
         commandSent = false;
+        dropBaselineY = 0.0D;
+        dropPrevY = 0.0D;
+        dropTicks = 0;
     }
 
     public boolean isComplete() { return state == State.COMPLETE; }
@@ -75,7 +75,6 @@ public final class PitStartupSequence {
                     commandSent = false;
                     buildMidPath(player);
                 } else {
-                    // Re-send only after a generous timeout so this never spams chat.
                     if (commandSent && System.currentTimeMillis() - commandSentAt > 8000L) {
                         commandSent = false;
                     }
@@ -84,11 +83,12 @@ public final class PitStartupSequence {
                 return;
 
             case MOVE_TO_MID:
+                if (goal == null) {
+                    buildMidPath(player);
+                }
                 followPath(player);
-                if (nearGoal(player, goal, 1.35D)) {
-                    // We only need to reach the mid drop point. From there, watch the actual Y movement.
+                if (isExactlyAtGoal(player)) {
                     path = null;
-                    goal = null;
                     dropBaselineY = player.posY;
                     dropPrevY = player.posY;
                     dropTicks = 0;
@@ -97,7 +97,6 @@ public final class PitStartupSequence {
                 return;
 
             case WAIT_FOR_DROP:
-                // Do not attempt another path while the player is naturally moving into the mid drop.
                 movement.forward(false);
                 movement.backward(false);
                 movement.strafe(0.0F);
@@ -111,7 +110,6 @@ public final class PitStartupSequence {
                 }
                 dropPrevY = player.posY;
 
-                // A gentle, sustained downward movement means the mid drop has started.
                 if (dropTicks >= 2) {
                     movement.release();
                     state = State.COMPLETE;
@@ -126,7 +124,9 @@ public final class PitStartupSequence {
     }
 
     private void buildMidPath(EntityPlayerSP player) {
-        goal = new BlockPos(MID_X, (int)Math.floor(player.posY), MID_Z);
+        goal = findExactMidStand(player);
+        path = null;
+        if (goal == null) return;
         path = pathFinder.findHierarchicalPath(
                 mc.theWorld,
                 new BlockPos(player.posX, player.posY, player.posZ),
@@ -135,26 +135,43 @@ public final class PitStartupSequence {
                 12000);
     }
 
-    private void followPath(EntityPlayerSP player) {
-        if (path == null || path.isFinished()) {
-            if (goal != null) {
-                path = pathFinder.findHierarchicalPath(
-                        mc.theWorld,
-                        new BlockPos(player.posX, player.posY, player.posZ),
-                        goal,
-                        45,
-                        12000);
+    /** Resolve the target column exactly at (-11,-13); only Y is searched. */
+    private BlockPos findExactMidStand(EntityPlayerSP player) {
+        int baseY = (int) Math.floor(player.posY);
+        BlockPos best = null;
+        int bestDelta = Integer.MAX_VALUE;
+        for (int dy = -GOAL_Y_SCAN; dy <= GOAL_Y_SCAN; dy++) {
+            int y = baseY + dy;
+            BlockPos candidate = new BlockPos(MID_X, y, MID_Z);
+            if (!PathFinder.isStandable(mc.theWorld, candidate)) continue;
+            int delta = Math.abs(dy);
+            if (best == null || delta < bestDelta) {
+                best = candidate;
+                bestDelta = delta;
             }
+        }
+        return best;
+    }
+
+    private void followPath(EntityPlayerSP player) {
+        if (goal == null) return;
+        if (path == null || path.isFinished()) {
+            path = pathFinder.findHierarchicalPath(
+                    mc.theWorld,
+                    new BlockPos(player.posX, player.posY, player.posZ),
+                    goal,
+                    45,
+                    12000);
         }
         if (path == null || path.isFinished()) return;
 
         while (!path.isFinished()) {
-            net.minecraft.util.BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
-            if (nearGoal(player, p, 0.8D)) path.advance(); else break;
+            BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
+            if (nearNode(player, p, 0.55D)) path.advance(); else break;
         }
         if (path.isFinished()) return;
 
-        net.minecraft.util.BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
+        BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
         double dx = p.getX() + 0.5D - player.posX;
         double dz = p.getZ() + 0.5D - player.posZ;
         double len = Math.sqrt(dx * dx + dz * dz);
@@ -162,22 +179,40 @@ public final class PitStartupSequence {
 
         double yaw = Math.atan2(-dx, dz) * 180.0D / Math.PI;
         double yawDiff = wrapDegrees(yaw - player.rotationYaw);
-        double rad = Math.toRadians(player.rotationYaw);
+        double rad = Math.toRadians(yaw);
         double forward = (-Math.sin(rad)) * (dx / len) + Math.cos(rad) * (dz / len);
         double strafe = Math.cos(rad) * (dx / len) + Math.sin(rad) * (dz / len);
 
-        if (Math.abs(yawDiff) > 65.0D) {
-            movement.forward(false);
-        } else {
-            movement.forward(forward > -0.2D);
-        }
+        // Startup route uses deterministic waypoint-facing rotation.
+        player.rotationYaw = (float) yaw;
+        player.rotationYawHead = (float) yaw;
+
+        movement.forward(forward > -0.2D && Math.abs(yawDiff) <= 65.0D);
         movement.backward(forward < -0.35D);
-        movement.strafe((float)Math.max(-1.0D, Math.min(1.0D, strafe)));
+        movement.strafe((float) Math.max(-1.0D, Math.min(1.0D, strafe)));
         movement.sprint(Math.abs(yawDiff) < 25.0D && forward > 0.55D && player.onGround);
 
         if (path.current().y > player.posY + 0.45D && player.onGround) {
             movement.jump();
         }
+    }
+
+    private boolean isExactlyAtGoal(EntityPlayerSP player) {
+        if (goal == null) return false;
+        double dx = player.posX - (MID_X + 0.5D);
+        double dz = player.posZ - (MID_Z + 0.5D);
+        double dy = player.posY - goal.getY();
+        return dx * dx + dz * dz <= 0.36D
+                && Math.abs(dy) <= 0.75D
+                && player.onGround
+                && PathFinder.isStandable(mc.theWorld, new BlockPos(MID_X, goal.getY(), MID_Z));
+    }
+
+    private boolean nearNode(EntityPlayerSP player, BlockPos pos, double radius) {
+        double dx = pos.getX() + 0.5D - player.posX;
+        double dz = pos.getZ() + 0.5D - player.posZ;
+        return dx * dx + dz * dz <= radius * radius
+                && Math.abs(player.posY - pos.getY()) <= 1.0D;
     }
 
     private boolean isPit() {
@@ -195,13 +230,6 @@ public final class PitStartupSequence {
         mc.thePlayer.sendChatMessage("/play pit");
         commandSent = true;
         commandSentAt = System.currentTimeMillis();
-    }
-
-    private boolean nearGoal(EntityPlayerSP p, BlockPos pos, double radius) {
-        if (pos == null) return false;
-        double dx = pos.getX() + 0.5D - p.posX;
-        double dz = pos.getZ() + 0.5D - p.posZ;
-        return dx * dx + dz * dz <= radius * radius && Math.abs(p.posY - pos.getY()) < 2.0D;
     }
 
     private static double wrapDegrees(double angle) {
