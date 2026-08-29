@@ -163,18 +163,19 @@ public class CombatExecutionController {
             Object nm = nmField.get(conn);
             if (nm == null) return;
 
-            // Create a C03PacketPlayer with rotation flag set.
-            Class<?> c03Class = Class.forName("net.minecraft.network.play.client.C03PacketPlayer");
-            java.lang.reflect.Constructor<?> ctor = c03Class.getConstructor(boolean.class);
-            Object packet = ctor.newInstance(self.onGround);
-
-            // Set rotation fields (MCP names, remapped by ForgeGradle).
-            java.lang.reflect.Field yawField = c03Class.getField("rotationYaw");
-            java.lang.reflect.Field pitchField = c03Class.getField("rotationPitch");
-            java.lang.reflect.Field rotatingField = c03Class.getField("rotating");
-            yawField.setFloat(packet, self.rotationYaw);
-            pitchField.setFloat(packet, self.rotationPitch);
-            rotatingField.setBoolean(packet, true);
+            // Send C06PacketPlayerPosLook (position + rotation).
+            // This matches what the Vanilla client sends in onUpdateWalkingPlayer
+            // and ensures the server has both position AND rotation before the
+            // attack packet arrives. Using only rotation (C05) triggers
+            // Vulcan Killaura A / BadPacket X detections.
+            Class<?> c06Class = Class.forName(
+                    "net.minecraft.network.play.client.C03PacketPlayer$C06PacketPlayerPosLook");
+            java.lang.reflect.Constructor<?> ctor = c06Class.getConstructor(
+                    double.class, double.class, double.class,
+                    float.class, float.class, boolean.class);
+            Object packet = ctor.newInstance(
+                    self.posX, self.posY, self.posZ,
+                    self.rotationYaw, self.rotationPitch, self.onGround);
 
             // Send via NetworkManager.sendPacket()
             java.lang.reflect.Method sendMethod = nm.getClass().getMethod("sendPacket",
