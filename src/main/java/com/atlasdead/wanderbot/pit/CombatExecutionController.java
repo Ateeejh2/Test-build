@@ -463,6 +463,7 @@ public class CombatExecutionController {
 
     public CombatTelemetry getTelemetry() { return telemetry; }
     public CombatNavigationCoordinator.Outcome getNavigationOutcome() { return combatCoordinator.getLastOutcome(); }
+    public KillAura getKillAura() { return killAura; }
 
     private State state(EntityPlayerSP self, EntityPlayer target, String mode, boolean attacking) {
         double dx = target.posX - self.posX;

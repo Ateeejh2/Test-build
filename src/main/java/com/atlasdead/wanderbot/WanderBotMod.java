@@ -97,24 +97,26 @@ public class WanderBotMod {
         Minecraft mc = Minecraft.getMinecraft();
         if (BOT == null) return;
 
-        if (event.phase == TickEvent.Phase.PRE) {
+        if (event.phase == TickEvent.Phase.START) {
             // KillAura rotation: BEFORE vanilla tick sends position packets.
             // By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
             // the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
-            if (BOT.killAura != null && BOT.killAura.enabled && event.player != null && mc.theWorld != null) {
+            com.atlasdead.wanderbot.pit.KillAura killAura = BOT.getCombatExecutor().getKillAura();
+            if (killAura != null && killAura.enabled && event.player != null && mc.theWorld != null) {
                 net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
                 if (target != null) {
-                    BOT.killAura.tickPre((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
+                    killAura.tickPre((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
                 }
             }
         }
 
-        if (event.phase == TickEvent.Phase.POST) {
+        if (event.phase == TickEvent.Phase.END) {
             // KillAura attack: AFTER vanilla tick has sent packets
-            if (BOT.killAura != null && BOT.killAura.enabled && event.player != null) {
+            com.atlasdead.wanderbot.pit.KillAura killAura = BOT.getCombatExecutor().getKillAura();
+            if (killAura != null && killAura.enabled && event.player != null) {
                 net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
                 if (target != null) {
-                    BOT.killAura.tickPost((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
+                    killAura.tickPost((net.minecraft.client.entity.EntityPlayerSP) event.player, target);
                 }
             }
         }
