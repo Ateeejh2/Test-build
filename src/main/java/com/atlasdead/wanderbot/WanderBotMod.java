@@ -18,6 +18,7 @@ import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import com.atlasdead.wanderbot.gui.ClickGuiScreen;
 import com.atlasdead.wanderbot.config.WanderBotSettings;
 import org.lwjgl.input.Keyboard;
+import org.lwjgl.input.Mouse;
 
 @Mod(modid = WanderBotMod.MODID, name = WanderBotMod.NAME, version = WanderBotMod.VERSION, clientSideOnly = true)
 public class WanderBotMod {
@@ -46,6 +47,27 @@ public class WanderBotMod {
         if (TOGGLE_KEY.isPressed() && BOT != null) BOT.toggle();
         if (CLICKGUI_KEY.isPressed() && Minecraft.getMinecraft().currentScreen == null) {
             Minecraft.getMinecraft().displayGuiScreen(new ClickGuiScreen());
+        }
+        // Lock all other keyboard input when bot is running
+        if (BOT != null && BOT.isActive() && Minecraft.getMinecraft().currentScreen == null) {
+            int key = Keyboard.getEventKey();
+            boolean isToggleKey = key == TOGGLE_KEY.getKeyCode();
+            boolean isEscape = key == Keyboard.KEY_ESCAPE;
+            boolean isGuiKey = key == CLICKGUI_KEY.getKeyCode();
+            if (!isToggleKey && !isEscape && !isGuiKey) {
+                Keyboard.next();
+            }
+        }
+    }
+
+    @SubscribeEvent
+    public void onMouse(InputEvent.MouseInputEvent event) {
+        if (BOT != null && BOT.isActive() && Minecraft.getMinecraft().currentScreen == null) {
+            int button = Mouse.getEventButton();
+            // Block left click (attack), right click (use), and middle click
+            if (button >= 0 && button <= 2) {
+                event.setCanceled(true);
+            }
         }
     }
 
