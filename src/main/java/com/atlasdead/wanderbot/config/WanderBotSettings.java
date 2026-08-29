@@ -40,8 +40,8 @@ public final class WanderBotSettings {
     public static double threatThreshold = 80.0D;
 
     // KillAura settings (Myau pattern)
-    public static float killAuraAttackRange = 3.0F;
-    public static float killAuraSwingRange = 3.5F;
+    public static double killAuraAttackRange = 3.0D;
+    public static double killAuraSwingRange = 3.5D;
     public static int killAuraMinCPS = 12;
     public static int killAuraMaxCPS = 14;
     public static int killAuraRotationMode = 2; // 0=NONE, 1=LEGIT, 2=SILENT, 3=LOCK_VIEW
@@ -98,8 +98,8 @@ public final class WanderBotSettings {
         threatThreshold = config.getFloat("threatThreshold", "combat", (float) threatThreshold, 20.0F, 150.0F, "Threat score retreat threshold.");
         forcePitMode = true; // Always bypass PitMode for testing
         // KillAura settings
-        killAuraAttackRange = config.getFloat("killAuraAttackRange", "killaura", killAuraAttackRange, 2.0F, 6.0F, "KillAura attack range.");
-        killAuraSwingRange = config.getFloat("killAuraSwingRange", "killaura", killAuraSwingRange, 2.0F, 6.0F, "KillAura swing range.");
+        killAuraAttackRange = config.getFloat("killAuraAttackRange", "killaura", (float)killAuraAttackRange, 2.0F, 6.0F, "KillAura attack range.");
+        killAuraSwingRange = config.getFloat("killAuraSwingRange", "killaura", (float)killAuraSwingRange, 2.0F, 6.0F, "KillAura swing range.");
         killAuraMinCPS = config.getInt("killAuraMinCPS", "killaura", killAuraMinCPS, 1, 20, "KillAura minimum CPS.");
         killAuraMaxCPS = config.getInt("killAuraMaxCPS", "killaura", killAuraMaxCPS, 1, 20, "KillAura maximum CPS.");
         killAuraRotationMode = config.getInt("killAuraRotationMode", "killaura", killAuraRotationMode, 0, 3, "KillAura rotation mode.");
