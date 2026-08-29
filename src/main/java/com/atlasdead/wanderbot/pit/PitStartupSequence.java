@@ -14,8 +14,8 @@ import net.minecraft.util.StringUtils;
 public final class PitStartupSequence {
     private enum State { CHECK_PIT, WAITING_FOR_PIT, MOVE_TO_MID, WAIT_FOR_DROP, COMPLETE }
 
-    private static final int MID_X = -11;
-    private static final int MID_Z = -13;
+    private static final int MID_X = -13;
+    private static final int MID_Z = -14;
     private static final int GOAL_Y_SCAN = 12;
 
     private final Minecraft mc;
@@ -135,7 +135,7 @@ public final class PitStartupSequence {
                 12000);
     }
 
-    /** Resolve the target column exactly at (-11,-13); only Y is searched. */
+    /** Resolve the target column exactly at (-13,-14); only Y is searched. */
     private BlockPos findExactMidStand(EntityPlayerSP player) {
         int baseY = (int) Math.floor(player.posY);
         BlockPos best = null;
