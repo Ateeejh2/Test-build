@@ -10,21 +10,34 @@ import net.minecraft.scoreboard.Scoreboard;
 import net.minecraft.util.BlockPos;
 import net.minecraft.util.StringUtils;
 
-/** Startup sequence used before the normal bot loop. Currently only route #1 is implemented. */
+import java.util.Random;
+
+/** Startup sequence before the normal bot loop. One of five mid routes is chosen per startup. */
 public final class PitStartupSequence {
     private enum State { CHECK_PIT, WAITING_FOR_PIT, MOVE_TO_MID, WAIT_FOR_DROP, COMPLETE }
 
-    private static final int MID_X = -13;
-    private static final int MID_Z = -14;
+    private static final int[][] MID_ROUTES = {
+            {-13, -14},
+            {-14, 15},
+            {16, 19},
+            {17, -17},
+            {0, 0}
+    };
+
     private static final int GOAL_Y_SCAN = 12;
+    private static final double DROP_PER_TICK = 0.035D;
+    private static final double DROP_MIN_TOTAL = 0.10D;
+    private static final int DROP_CONFIRM_TICKS = 2;
 
     private final Minecraft mc;
     private final MovementController movement;
     private final PathFinder pathFinder;
+    private final Random random = new Random();
 
     private State state = State.CHECK_PIT;
     private Path path;
     private BlockPos goal;
+    private int selectedRoute = -1;
     private long commandSentAt;
     private boolean commandSent;
     private double dropBaselineY;
@@ -41,6 +54,7 @@ public final class PitStartupSequence {
         state = State.CHECK_PIT;
         path = null;
         goal = null;
+        selectedRoute = -1;
         commandSentAt = 0L;
         commandSent = false;
         dropBaselineY = 0.0D;
@@ -51,7 +65,11 @@ public final class PitStartupSequence {
     public boolean isComplete() { return state == State.COMPLETE; }
     public Path getPath() { return path; }
     public BlockPos getGoal() { return goal; }
-    public String getStatus() { return state.name(); }
+    public String getStatus() {
+        if (selectedRoute < 0) return state.name();
+        int[] route = MID_ROUTES[selectedRoute];
+        return state.name() + " R" + (selectedRoute + 1) + " (" + route[0] + "," + route[1] + ")";
+    }
 
     public void tick(EntityPlayerSP player) {
         if (player == null || mc.theWorld == null) return;
@@ -60,8 +78,10 @@ public final class PitStartupSequence {
         switch (state) {
             case CHECK_PIT:
                 if (isPit()) {
+                    selectRoute();
                     state = State.MOVE_TO_MID;
                     commandSent = false;
+                    beginDropWatch(player);
                     buildMidPath(player);
                 } else {
                     sendPlayPitOnce();
@@ -71,8 +91,10 @@ public final class PitStartupSequence {
 
             case WAITING_FOR_PIT:
                 if (isPit()) {
+                    selectRoute();
                     state = State.MOVE_TO_MID;
                     commandSent = false;
+                    beginDropWatch(player);
                     buildMidPath(player);
                 } else {
                     if (commandSent && System.currentTimeMillis() - commandSentAt > 8000L) {
@@ -83,15 +105,18 @@ public final class PitStartupSequence {
                 return;
 
             case MOVE_TO_MID:
+                if (detectDrop(player)) {
+                    completeStartup();
+                    return;
+                }
+
                 if (goal == null) {
                     buildMidPath(player);
                 }
                 followPath(player);
                 if (isExactlyAtGoal(player)) {
                     path = null;
-                    dropBaselineY = player.posY;
-                    dropPrevY = player.posY;
-                    dropTicks = 0;
+                    beginDropWatch(player);
                     state = State.WAIT_FOR_DROP;
                 }
                 return;
@@ -102,18 +127,8 @@ public final class PitStartupSequence {
                 movement.strafe(0.0F);
                 movement.sprint(false);
 
-                double deltaY = dropPrevY - player.posY;
-                if (deltaY >= 0.035D && player.posY < dropBaselineY - 0.10D) {
-                    dropTicks++;
-                } else if (player.posY >= dropPrevY - 0.01D) {
-                    dropTicks = 0;
-                }
-                dropPrevY = player.posY;
-
-                if (dropTicks >= 2) {
-                    movement.release();
-                    state = State.COMPLETE;
-                    return;
+                if (detectDrop(player)) {
+                    completeStartup();
                 }
                 return;
 
@@ -123,7 +138,13 @@ public final class PitStartupSequence {
         }
     }
 
+    private void selectRoute() {
+        if (selectedRoute >= 0) return;
+        selectedRoute = random.nextInt(MID_ROUTES.length);
+    }
+
     private void buildMidPath(EntityPlayerSP player) {
+        if (selectedRoute < 0) selectRoute();
         goal = findExactMidStand(player);
         path = null;
         if (goal == null) return;
@@ -135,14 +156,14 @@ public final class PitStartupSequence {
                 12000);
     }
 
-    /** Resolve the target column exactly at (-13,-14); only Y is searched. */
     private BlockPos findExactMidStand(EntityPlayerSP player) {
+        int[] route = MID_ROUTES[selectedRoute];
         int baseY = (int) Math.floor(player.posY);
         BlockPos best = null;
         int bestDelta = Integer.MAX_VALUE;
         for (int dy = -GOAL_Y_SCAN; dy <= GOAL_Y_SCAN; dy++) {
             int y = baseY + dy;
-            BlockPos candidate = new BlockPos(MID_X, y, MID_Z);
+            BlockPos candidate = new BlockPos(route[0], y, route[1]);
             if (!PathFinder.isStandable(mc.theWorld, candidate)) continue;
             int delta = Math.abs(dy);
             if (best == null || delta < bestDelta) {
@@ -183,7 +204,6 @@ public final class PitStartupSequence {
         double forward = (-Math.sin(rad)) * (dx / len) + Math.cos(rad) * (dz / len);
         double strafe = Math.cos(rad) * (dx / len) + Math.sin(rad) * (dz / len);
 
-        // Startup route uses deterministic waypoint-facing rotation.
         player.rotationYaw = (float) yaw;
         player.rotationYawHead = (float) yaw;
 
@@ -197,15 +217,40 @@ public final class PitStartupSequence {
         }
     }
 
+    private void beginDropWatch(EntityPlayerSP player) {
+        dropBaselineY = player.posY;
+        dropPrevY = player.posY;
+        dropTicks = 0;
+    }
+
+    private boolean detectDrop(EntityPlayerSP player) {
+        double deltaY = dropPrevY - player.posY;
+        if (deltaY >= DROP_PER_TICK && player.posY < dropBaselineY - DROP_MIN_TOTAL) {
+            dropTicks++;
+        } else if (player.posY >= dropPrevY - 0.01D) {
+            dropTicks = 0;
+        }
+        dropPrevY = player.posY;
+        return dropTicks >= DROP_CONFIRM_TICKS;
+    }
+
+    private void completeStartup() {
+        movement.release();
+        state = State.COMPLETE;
+        path = null;
+        goal = null;
+    }
+
     private boolean isExactlyAtGoal(EntityPlayerSP player) {
-        if (goal == null) return false;
-        double dx = player.posX - (MID_X + 0.5D);
-        double dz = player.posZ - (MID_Z + 0.5D);
+        if (goal == null || selectedRoute < 0) return false;
+        int[] route = MID_ROUTES[selectedRoute];
+        double dx = player.posX - (route[0] + 0.5D);
+        double dz = player.posZ - (route[1] + 0.5D);
         double dy = player.posY - goal.getY();
         return dx * dx + dz * dz <= 0.36D
                 && Math.abs(dy) <= 0.75D
                 && player.onGround
-                && PathFinder.isStandable(mc.theWorld, new BlockPos(MID_X, goal.getY(), MID_Z));
+                && PathFinder.isStandable(mc.theWorld, new BlockPos(route[0], goal.getY(), route[1]));
     }
 
     private boolean nearNode(EntityPlayerSP player, BlockPos pos, double radius) {
