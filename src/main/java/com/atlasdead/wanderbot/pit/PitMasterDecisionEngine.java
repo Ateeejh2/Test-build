@@ -71,7 +71,7 @@ public final class PitMasterDecisionEngine {
         if (snapshot.event != null && snapshot.event.major) {
             return record(decision(snapshot, Action.EVENT, "major-event:" + snapshot.event.eventName, 90.0D, 0.0D, target));
         }
-        if (rules != null && !pit.getRules().mayAcquireCombatTarget(rules)) {
+        if (!WanderBotSettings.forcePitMode && rules != null && !pit.getRules().mayAcquireCombatTarget(rules)) {
             return record(decision(snapshot, Action.EVENT, "rules-block-combat", 90.0D, 0.0D, target));
         }
         if (self.getHealth() <= 0.0F || snapshot.mode == PitMode.RECOVERING) {

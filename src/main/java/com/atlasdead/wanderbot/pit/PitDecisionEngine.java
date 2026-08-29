@@ -95,6 +95,18 @@ public class PitDecisionEngine {
         }
         modeTicks++;
 
+        // forcePitMode: bypass all state detection, streak evaluation, and event handling.
+        // Just find the nearest player and attack. No strategy scoring applied.
+        if (WanderBotSettings.forcePitMode) {
+            EntityPlayer forceTarget = targets.findBest(mc.theWorld, self, WanderBotSettings.targetScanRange, zones, null);
+            if (forceTarget != null) {
+                mode = PitMode.STREAKING;
+                return;
+            }
+            mode = PitMode.STREAKING;
+            return;
+        }
+
         PitStateDetector.Result state = detector.detect(mc);
         if (!state.available) {
             mode = PitMode.UNSAFE;
