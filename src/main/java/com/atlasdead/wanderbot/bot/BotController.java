@@ -59,6 +59,11 @@ public class BotController {
     private int jumpCooldown;
     private int attackCooldown;
 
+    // Myau KillAura chat control
+    private static final double KILLAURA_RANGE = 3.5D;
+    private boolean killAuraActive = false;
+    private int killAuraChatCooldown = 0;
+
     /* Validation cache: share validate() result between tick() and localHazard(). */
     private Path lastValidatedPath;
     private int lastValidatedIndex = -1;
@@ -113,6 +118,7 @@ public class BotController {
         runtimeGuard.reset();
         combatExecutor.reset();
         movement.release();
+        ensureKillAuraOff();
     }
 
     public void tick() {
@@ -134,6 +140,7 @@ public class BotController {
             movement.release();
             movement.releaseJump();
             movement.attack(false);
+            ensureKillAuraOff();
             state = BotState.RECOVERING;
             pit.handleRuntimeDeath();
             return;
@@ -222,6 +229,9 @@ public class BotController {
             pit.getTargets().clear();
             target = null;
         }
+
+        // Myau KillAura chat control: toggle on/off based on target distance
+        updateKillAura(player, target);
 
         com.atlasdead.wanderbot.pit.PitExecutionOrchestrator.Directive directive =
                 executorRouter.resolve(player, masterDecision, target, state == BotState.RECOVERING);
@@ -408,10 +418,65 @@ public class BotController {
         runtimeGuard.reset();
         pit.stop();
         state = BotState.OFF;
+        ensureKillAuraOff();
     }
 
     public String getRuntimeGuardStatus() {
         return runtimeGuard.getStatus().name();
+    }
+
+    // ===================================================================
+    // Myau KillAura chat control
+    // ===================================================================
+
+    /**
+     * Toggle Myau KillAura on/off via chat based on target distance.
+     * Sends `.t killaura on` when target <= 3.5 blocks,
+     * `.t killaura off` when target > 3.5 blocks or target is null.
+     * Uses a cooldown to avoid spamming the same command every tick.
+     */
+    private void updateKillAura(EntityPlayerSP player, EntityPlayer target) {
+        if (killAuraChatCooldown > 0) {
+            killAuraChatCooldown--;
+            return;
+        }
+
+        if (target == null || target.isDead || target.getHealth() <= 0F) {
+            // No target: ensure KillAura is off
+            if (killAuraActive) {
+                sendKillAuraCommand(false);
+                killAuraActive = false;
+                killAuraChatCooldown = 10; // 0.5s cooldown
+            }
+            return;
+        }
+
+        double distance = player.getDistanceToEntity(target);
+
+        if (distance <= KILLAURA_RANGE && !killAuraActive) {
+            sendKillAuraCommand(true);
+            killAuraActive = true;
+            killAuraChatCooldown = 10;
+        } else if (distance > KILLAURA_RANGE && killAuraActive) {
+            sendKillAuraCommand(false);
+            killAuraActive = false;
+            killAuraChatCooldown = 10;
+        }
+    }
+
+    /** Send `.t killaura on` or `.t killaura off` via chat. */
+    private void sendKillAuraCommand(boolean on) {
+        if (mc.thePlayer == null) return;
+        String cmd = on ? ".t killaura on" : ".t killaura off";
+        mc.thePlayer.sendChatMessage(cmd);
+    }
+
+    /** Ensure KillAura is turned off when bot stops. */
+    private void ensureKillAuraOff() {
+        if (killAuraActive) {
+            sendKillAuraCommand(false);
+            killAuraActive = false;
+        }
     }
 
     public com.atlasdead.wanderbot.pit.CombatExecutionController getCombatExecutor() { return combatExecutor; }
