@@ -49,7 +49,6 @@ public class WanderBotMod {
         if (CLICKGUI_KEY.isPressed() && Minecraft.getMinecraft().currentScreen == null) {
             Minecraft.getMinecraft().displayGuiScreen(new ClickGuiScreen());
         }
-        // Lock all other keyboard input when bot is running
         if (BOT != null && BOT.isEnabled() && Minecraft.getMinecraft().currentScreen == null) {
             int key = Keyboard.getEventKey();
             boolean isToggleKey = key == TOGGLE_KEY.getKeyCode();
@@ -63,36 +62,28 @@ public class WanderBotMod {
 
     @SubscribeEvent
     public void onMouse(InputEvent.MouseInputEvent event) {
-        // MouseInputEvent is NOT @Cancelable in Forge 1.8.9.
-        // Attempting setCanceled(true) throws IllegalArgumentException and crashes the game.
-        // Mouse clicks are harmless during bot operation since movement/rotation/attack
-        // are controlled via KeyBinding.setKeyBindState() which overrides player input.
-        // If accidental inventory opening is a concern, the bot can detect and close it
-        // in the tick handler instead.
+        // MouseInputEvent is not cancelable in Forge 1.8.9.
     }
 
     @SubscribeEvent
     public void onChat(ClientChatReceivedEvent event) {
         if (event == null || event.message == null || BOT == null) return;
 
-        // Keep the existing Pit chat observer intact.
         BOT.getPit().getProgress().observeChat(event.message);
 
-        // Myau reports KillAura state as a client-facing status message.
-        // Normalize/strip formatting before matching so color codes do not
-        // affect the state synchronization.
-        String plain = StringUtils.stripControlCodes(event.message.getFormattedText());
+        String formatted = event.message.getFormattedText();
+        String plain = StringUtils.stripControlCodes(formatted == null ? "" : formatted);
+        plain = plain.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
+
         if ("[Myau] KillAura: ON".equals(plain)) {
             BOT.applyKillAuraStateFromMessage(true);
         } else if ("[Myau] KillAura: OFF".equals(plain)) {
             BOT.applyKillAuraStateFromMessage(false);
         }
 
-        // Server death notification. <level> and <ign> are variable, so only
-        // the fixed message structure is matched. On death, reset the entire
-        // bot lifecycle so the next tick starts from the normal startup path.
-        String deathText = plain == null ? "" : plain.trim();
-        if (deathText.matches("DEATH! by \\[[^\\]]+\\] \\S+ VIEW RECAP")) {
+        // The server varies both level and IGN. Match the invariant message
+        // structure after stripping all Minecraft formatting codes.
+        if (plain.matches("(?i).*DEATH!\\s+by\\s+\\[[^\\]]+\\]\\s+\\S+\\s+VIEW\\s+RECAP.*")) {
             BOT.handleDeathMessage();
         }
     }
