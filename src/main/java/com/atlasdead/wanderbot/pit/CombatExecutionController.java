@@ -8,6 +8,7 @@ import com.atlasdead.wanderbot.pathfinding.CombatPathFinder;
 import com.atlasdead.wanderbot.pathfinding.CombatSteering;
 import com.atlasdead.wanderbot.pathfinding.CombatStuckDetector;
 import com.atlasdead.wanderbot.pathfinding.Path;
+import com.atlasdead.wanderbot.rotation.AimController;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
@@ -71,6 +72,7 @@ public class CombatExecutionController {
     private final CombatTacticalModel tactical = new CombatTacticalModel();
     private final CombatNavigationCoordinator combatCoordinator;
     private final CombatNavigationController combatNavigation = new CombatNavigationController();
+    private AimController aimController;
     // Combat pathfinding
     private final CombatPathFinder combatPathFinder = new CombatPathFinder();
     private final CombatSteering combatSteering = new CombatSteering();
@@ -96,6 +98,7 @@ public class CombatExecutionController {
         this.mc = mc;
         this.movement = movement;
         this.rotation = rotation;
+        this.aimController = new AimController(rotation);
         this.combatCoordinator = new CombatNavigationCoordinator(mc, new TerrainAnalyzer(), new LocalAvoidanceController());
         this.control = new CombatControlModel(mc, null, null);
     }
@@ -105,6 +108,7 @@ public class CombatExecutionController {
         this.mc = mc;
         this.movement = movement;
         this.rotation = rotation;
+        this.aimController = new AimController(rotation);
         this.combatCoordinator = new CombatNavigationCoordinator(mc, new TerrainAnalyzer(), new LocalAvoidanceController());
         this.control = new CombatControlModel(mc, zones, targets);
     }
@@ -126,6 +130,7 @@ public class CombatExecutionController {
         rotationAlignedTick = 0;
         strafeSign = 1;
         tactical.reset();
+        aimController.reset();
         control.reset();
         stateMachine.reset();
         combatCoordinator.reset();
@@ -134,20 +139,6 @@ public class CombatExecutionController {
         megastreakProfile = null;
         combatState = CombatState.NO_TARGET;
         currentTarget = null;
-    }
-
-    /**
-     * Convert a world-space movement vector (routeX, routeZ) into the player's
-    /**
-     * Compute horizontal yaw error to target WITHOUT setting rotation.
-     * KillAura handles rotation; this is only for movement decisions.
-     */
-    private static float computeYawError(EntityPlayerSP self, EntityPlayer target) {
-        double dx = target.posX - self.posX;
-        double dz = target.posZ - self.posZ;
-        if (dx * dx + dz * dz < 1.0E-8D) return 0.0F;
-        float desired = (float) (Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
-        return Math.abs(MathHelper.wrapAngleTo180_float(desired - self.rotationYaw));
     }
 
     public State tick(EntityPlayerSP self, EntityPlayer target, CombatDecisionEngine.Action action, long now) {
@@ -226,14 +217,18 @@ public class CombatExecutionController {
 
         CombatTrackingModel.Snapshot tracking = tactical.getTrackingState();
 
-        // Compute yaw/pitch error WITHOUT setting rotation.
-        // KillAura (Myau) handles rotation and attack.
-        // We only need yawError for movement decisions.
-        float yawError = computeYawError(self, target);
-        float pitchError = 0.0F;
+        // Aim at target — this sets rotationYaw/pitch so movement works correctly.
+        // KillAura handles attack timing; we handle rotation for movement.
+        AimController.Result aim = aimController.update(self, target, tracking, distance, visible, true);
+        float yawError = aim.yawError;
+        float pitchError = aim.pitchError;
 
-        // KillAura handles alignment — always treat as aligned for movement
-        rotationAlignedTick = 10;
+        // Track rotation alignment for attack timing
+        if (aim.aligned) {
+            rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
+        } else {
+            rotationAlignedTick = 0;
+        }
 
         // === Combat Pathfinding: A*-based terrain-aware path to target ===
         Path combatPath = combatPathFinder.getPath(mc.theWorld, self, target, 200);
