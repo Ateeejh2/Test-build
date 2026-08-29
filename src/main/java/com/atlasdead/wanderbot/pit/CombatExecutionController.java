@@ -15,13 +15,7 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.MathHelper;
 
-/**
- * Executes client-side movement for the Pit combat layer.
- *
- * Combat Path is authoritative for movement. When KillAura is OFF, rotation
- * follows the same rendered combat waypoint. When KillAura is ON, rotation is
- * left entirely to KillAura and only path movement inputs are generated here.
- */
+/** Executes client-side movement for the Pit combat layer. */
 public class CombatExecutionController {
     public static final class State {
         public final String mode;
@@ -131,6 +125,8 @@ public class CombatExecutionController {
         control.reset();
         stateMachine.reset();
         combatCoordinator.reset();
+        combatStuck.reset();
+        combatPathFinder.reset();
         telemetry = CombatTelemetry.idle();
         feedback.reset();
         megastreakProfile = null;
@@ -159,12 +155,14 @@ public class CombatExecutionController {
             combatState = CombatState.NO_TARGET;
             currentTarget = null;
             lastCombatPath = null;
+            combatPathFinder.reset();
             return publishState(state(self, target, "RESET", false));
         }
 
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.getEntity() != target) {
             currentTarget = new CombatTarget(target, now / 50L);
             combatState = CombatState.ACQUIRE_TARGET;
+            combatPathFinder.reset();
         } else {
             currentTarget = currentTarget.refresh(now / 50L);
         }
@@ -203,16 +201,13 @@ public class CombatExecutionController {
             movement.forward(retreatRoute.x < -0.15D);
             movement.backward(retreatRoute.x > 0.20D);
             movement.strafe(retreatStrafe);
-            movement.sprint(false);
+            movement.sprint(true);
             movement.attack(false);
             combatState = CombatState.APPROACH;
             return publishState(state(self, target, retreatRoute.reason, false));
         }
 
-        // Compute the same combat path that PathRenderer displays before any
-        // rotation or movement decision is made. Use a sufficiently large
-        // search budget so a valid route is not rejected merely because the
-        // target is more than a few blocks away.
+        // Path is the single authoritative combat movement source.
         lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 10000);
         Path combatPath = lastCombatPath;
 
@@ -222,6 +217,10 @@ public class CombatExecutionController {
             lastCombatPath = combatPathFinder.getPath(mc.theWorld, self, target, 10000);
             combatPath = lastCombatPath;
         }
+
+        // IMPORTANT: steering advances reached nodes first. Rotation then uses
+        // the exact active node that movement uses in the same tick.
+        CombatSteering.Result steer = combatSteering.compute(self, combatPath, distance);
 
         float yawError;
         float pitchError;
@@ -234,7 +233,7 @@ public class CombatExecutionController {
             double waypointX = waypoint.x + 0.5D;
             double waypointY = waypoint.y + 1.0D;
             double waypointZ = waypoint.z + 0.5D;
-            yawError = rotation.tick(self, waypointX, waypointY, waypointZ, 0.0F);
+            yawError = rotation.tickPath(self, waypointX, waypointY, waypointZ);
             pitchError = 0.0F;
             if (yawError <= 10.0F) rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
             else rotationAlignedTick = 0;
@@ -245,8 +244,6 @@ public class CombatExecutionController {
             if (aim.aligned) rotationAlignedTick = Math.min(rotationAlignedTick + 1, 20);
             else rotationAlignedTick = 0;
         }
-
-        CombatSteering.Result steer = combatSteering.compute(self, combatPath, distance);
 
         boolean inRange = distance <= 3.20D;
         boolean canAttackNow = action == CombatDecisionEngine.Action.ATTACK
@@ -263,7 +260,7 @@ public class CombatExecutionController {
         movement.forward(steer.forward);
         movement.backward(steer.backward);
         movement.strafe(steer.strafe);
-        movement.sprint(steer.sprint && self.onGround);
+        movement.sprint(self.onGround);
         if (steer.jump && self.onGround && jumpTimer <= 0) {
             movement.jump();
             jumpTimer = 6;
@@ -280,19 +277,13 @@ public class CombatExecutionController {
         int pathIdx = combatPath != null ? combatPath.getIndex() : 0;
         int pathSize = combatPath != null ? combatPath.getNodes().size() : 0;
         combatDebug = String.format("State=%s T=%s D=%.1f Path=%d/%d Stuck=%s Sprint=%s Jump=%s Atk=%d Rot=%s",
-                combatState.name(),
-                target != null ? target.getName() : "none",
-                distance, pathIdx, pathSize,
-                stuckAction.name(),
-                steer.sprint ? "ON" : "OFF",
-                steer.jump ? "YES" : "no",
-                attackTimer,
-                killAuraActive ? "KILLAURA" : "PATH");
+                combatState.name(), target != null ? target.getName() : "none", distance,
+                pathIdx, pathSize, stuckAction.name(), self.onGround ? "ON" : "AIR",
+                steer.jump ? "YES" : "no", attackTimer, killAuraActive ? "KILLAURA" : "PATH");
 
         return publishState(new State(action.name(), distance, yawError, pitchError, visible,
                 combatState == CombatState.COOLDOWN,
-                rotationAlignedTick >= ROTATION_MIN_DELAY, inRange,
-                canAttackNow,
+                rotationAlignedTick >= ROTATION_MIN_DELAY, inRange, canAttackNow,
                 attackTimer, controlDecision.reason));
     }
 
