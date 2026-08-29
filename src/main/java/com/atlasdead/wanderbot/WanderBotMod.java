@@ -88,23 +88,29 @@ public class WanderBotMod {
      * the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
      */
     @SubscribeEvent
-    public void onPlayerTick(TickEvent.PlayerTickEvent event) {
-        if (event.phase != TickEvent.Phase.PRE) return;
-        if (BOT == null || BOT.killAura == null || !BOT.killAura.enabled) return;
-        if (mc.thePlayer == null || mc.theWorld == null) return;
-        net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
-        if (target == null) return;
-        BOT.killAura.tickPre(mc.thePlayer, target);
-    }
-
-    @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase == TickEvent.Phase.END && BOT != null) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (BOT == null) return;
+
+        if (event.phase == TickEvent.Phase.PRE) {
+            // KillAura rotation: PRE phase, BEFORE vanilla tick sends position packets.
+            // This mirrors Myau's @EventTarget(priority=3) onUpdate(PRE) handler.
+            // By setting rotationYaw/pitch here, vanilla's C03/C06 packets will include
+            // the correct rotation values, preventing Vulcan Killaura A / BadPacket X.
+            if (BOT.killAura != null && BOT.killAura.enabled && mc.thePlayer != null && mc.theWorld != null) {
+                net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
+                if (target != null) {
+                    BOT.killAura.tickPre(mc.thePlayer, target);
+                }
+            }
+        }
+
+        if (event.phase == TickEvent.Phase.END) {
             // KillAura attack: POST phase, AFTER vanilla tick has sent packets
             // Rotation was already sent by vanilla with correct values from tickPre
-            if (BOT.killAura != null && BOT.killAura.enabled) {
+            if (BOT.killAura != null && BOT.killAura.enabled && mc.thePlayer != null) {
                 net.minecraft.entity.player.EntityPlayer target = BOT.getPit().getTargets().getTarget();
-                if (target != null && mc.thePlayer != null) {
+                if (target != null) {
                     BOT.killAura.tickPost(mc.thePlayer, target);
                 }
             }
