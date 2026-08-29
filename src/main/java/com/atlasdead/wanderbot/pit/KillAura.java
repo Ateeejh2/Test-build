@@ -160,26 +160,23 @@ public class KillAura {
 
         if (canAttack) {
             // ============================================================
-            // ATTACK SEQUENCE — Matches vanilla 1.8.9 left-click exactly.
+            // MACRO-STYLE ATTACK — Simulate mouse click, not manual packets.
             //
-            // playerController.attackEntity() does:
-            //   1. Sends C02PacketUseEntity (attack) to send queue
-            //   2. Calls attackTargetEntityWithCurrentItem() (client-side effects)
-            //   3. Calls swingItem() which sets isSwinging = true
+            // Instead of calling playerController.attackEntity() directly
+            // (which sends C02 manually), we call mc.clickMouse() which is
+            // vanilla's own left-click handler. This triggers the EXACT same
+            // code path as a real player pressing the mouse button:
             //
-            // Then vanilla's onUpdateWalkingPlayer() does:
-            //   4. Sends C03PacketPlayer (position/rotation)
-            //   5. Sends C0APacketAnimation (swing) because isSwinging == true
+            //   mc.clickMouse()
+            //     → swingItem()          (sets isSwinging = true)
+            //     → attackEntity()       (sends C02 + client-side effects)
+            //     → onUpdateWalkingPlayer() (sends C03 + C0A naturally)
             //
-            // Result: C02 → C03 → C0A (exactly one swing, correct order)
-            //
-            // Do NOT send a manual C0APacketAnimation here — that would
-            // create a duplicate swing packet and trigger Vulcan detections.
+            // Result: Vanilla handles ALL packet ordering and client-side
+            // effects. No manual packet injection needed.
+            // This is indistinguishable from a real player clicking.
             // ============================================================
-
-            // Attack via playerController — this is the ONLY packet-sending
-            // call needed. It handles C02 + sets swing state for vanilla's C0A.
-            mc.playerController.attackEntity(self, targetEntity);
+            clickMouse();
 
             // Set next attack delay (ms-based like Myau)
             attackDelayMS += getAttackDelay();
@@ -207,6 +204,41 @@ public class KillAura {
     // No manual packet sending needed — attackEntity() handles C02,
     // and vanilla's onUpdateWalkingPlayer() handles C0A + C03.
     // This avoids duplicate swing packets that trigger Vulcan detections.
+
+    // ===================================================================
+    // MACRO HELPER — Simulate mouse click via reflection
+    // ===================================================================
+
+    /**
+     * Simulate a left mouse click by calling mc.clickMouse() via reflection.
+     * This is the same method vanilla calls when you press the attack button.
+     * It handles swingItem(), attackEntity(), and all client-side effects
+     * exactly as a real player click would.
+     *
+     * Using reflection because clickMouse() is private in Minecraft 1.8.9.
+     * The Method object is cached after the first call for performance.
+     */
+    private static java.lang.reflect.Method clickMouseMethod;
+    private static boolean clickMouseFailed = false;
+
+    private void clickMouse() {
+        try {
+            if (clickMouseMethod == null && !clickMouseFailed) {
+                clickMouseMethod = Minecraft.class.getDeclaredMethod("clickMouse");
+                clickMouseMethod.setAccessible(true);
+            }
+            if (clickMouseMethod != null) {
+                clickMouseMethod.invoke(mc);
+            }
+        } catch (Exception e) {
+            clickMouseFailed = true;
+            // Fallback: use playerController.attackEntity() directly
+            // This is less ideal but still works
+            mc.playerController.attackEntity(
+                    mc.thePlayer,
+                    mc.objectMouseOver.entityHit);
+        }
+    }
 
     // ===================================================================
     // UTILITY — Matches Myau's RotationUtil methods
