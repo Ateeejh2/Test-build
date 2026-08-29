@@ -89,7 +89,7 @@ public final class CombatControlModel {
         // Avoid churn: a better target must remain meaningfully better than the
         // currently locked target unless the current target has become invalid.
         if (betterTarget && now >= reassessUntil) {
-            reassessUntil = now + 450L;
+            reassessUntil = now + 1200L;
             return new Decision(Phase.REASSESS, true, true, false, desired, lateralBias(tactical), "better-target");
         }
 

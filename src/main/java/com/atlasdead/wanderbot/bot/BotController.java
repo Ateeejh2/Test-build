@@ -305,7 +305,9 @@ public class BotController {
         advanceReached(player);
         if (path == null || path.isFinished()) return;
 
-        if (validationCooldown == 0) {
+        // Skip path validation/hazard checks during combat — the combat layer
+        // manages its own movement and does not use the navigation path.
+        if (!combatActive && validationCooldown == 0) {
             validationCooldown = 4;
             if (!validator.validate(mc.theWorld, path, 9)) {
                 lastValidatedPath = path;
@@ -321,7 +323,7 @@ public class BotController {
             validateCacheMisses++;
         }
 
-        if (replanCooldown == 0 && localHazard(player)) {
+        if (!combatActive && replanCooldown == 0 && localHazard(player)) {
             requestReplan();
             return;
         }
@@ -348,7 +350,20 @@ public class BotController {
 
         boolean tightTurn = yawError > 78.0F;
         boolean moderateTurn = yawError > 34.0F;
-        boolean sprintAllowed = player.onGround && yawError < (narrow ? 9.0F : 18.0F) && !avoid.avoiding && steering.lookahead > 1.6D;
+        // Sprint decision based on forward-component alignment instead of raw yawError.
+        // This avoids sprint being blocked by Humanizer overshoot/jitter/distraction
+        // that temporarily inflates yawError even though the movement direction is correct.
+        double fwdLen = Math.sqrt(desiredX * desiredX + desiredZ * desiredZ);
+        double forwardComponent = 0.0D;
+        if (fwdLen > 0.001D) {
+            double ndx = desiredX / fwdLen;
+            double ndz = desiredZ / fwdLen;
+            double yawRad = Math.toRadians(player.rotationYaw);
+            double playerFwdX = -Math.sin(yawRad);
+            double playerFwdZ = Math.cos(yawRad);
+            forwardComponent = ndx * playerFwdX + ndz * playerFwdZ;
+        }
+        boolean sprintAllowed = player.onGround && forwardComponent > 0.6D && !avoid.avoiding && steering.lookahead > 1.2D;
 
         if (tightTurn) {
             movement.forward(false);

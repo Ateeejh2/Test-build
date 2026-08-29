@@ -169,10 +169,8 @@ public class CombatExecutionController {
             movement.release();
             return publishState(state(self, target, threats.crossfire ? "CROSSFIRE_REASSESS" : "SURROUNDED_REASSESS", false));
         }
-        if (controlDecision.requestRetarget || controlDecision.phase == CombatControlModel.Phase.REASSESS) {
-            movement.release();
-            return publishState(state(self, target, "REASSESS", false));
-        }
+        boolean suppressAttack = controlDecision.requestRetarget
+                || controlDecision.phase == CombatControlModel.Phase.REASSESS;
         if (controlDecision.phase == CombatControlModel.Phase.RETREAT) {
             CombatNavigationController.Result retreatRoute = combatNavigation.compute(
                     mc.theWorld, self, target, tacticalState, distance);
@@ -197,7 +195,7 @@ public class CombatExecutionController {
             return publishState(state(self, target, "COMBAT_ROUTE_BLOCKED", false));
         }
 
-        if (action == CombatDecisionEngine.Action.ATTACK && controlDecision.allowAttack) {
+        if (action == CombatDecisionEngine.Action.ATTACK && controlDecision.allowAttack && !suppressAttack) {
             executeAttack(self, target, distance, visible, yawError, pitchError, tacticalState, combatRoute);
         } else {
             executeApproach(self, target, distance, visible, yawError, tacticalState, combatRoute);
@@ -248,13 +246,14 @@ public class CombatExecutionController {
         if (tooClose) moveForward = false;
         moveForward = moveForward && route.distanceBias > -0.95D;
         // Also require local forward component to be positive (target is ahead)
-        moveForward = moveForward && localFwd > -0.15D;
+        moveForward = moveForward && localFwd > -0.25D;
         movement.forward(moveForward);
         double aggression = megastreakProfile == null ? 0.55D : megastreakProfile.targetAggression;
         float strafeAmount = tooClose ? 0.65F : (targetRetreating ? 0.58F : (float)(0.35D + aggression * 0.20D));
         float routeStrafe = (float)(localStr * 0.45D + strafe * strafeAmount);
         movement.strafe(routeStrafe);
-        movement.sprint(false);
+        // Sprint when approaching, hold position when already in melee range
+        movement.sprint(distance > tacticalState.preferredDistance && self.onGround && aligned);
 
         if (jumpTimer == 0 && self.onGround && shouldCombatJump(self, target, distance, tacticalState)) {
             movement.jump();
@@ -283,33 +282,64 @@ public class CombatExecutionController {
         double localFwd = toLocalForward(self, route.x, route.z);
         double localStr = toLocalStrafe(self, route.x, route.z);
 
+        // Distance-based movement decision with clear forward/backward/hold zones.
+        float preferred = tacticalState.preferredDistance;
+        boolean tooClose = distance < preferred - 0.55D;
+        boolean tooFar = distance > preferred + 0.55D;
+
         if (visible && distance < 5.0D) {
             float strafe = tacticalState.strafeSign;
-            boolean tooClose = distance < tacticalState.preferredDistance - 0.55D;
-            movement.forward(localFwd > 0.05D && !tooClose);
-            movement.backward(localFwd < -0.25D);
+            // FORWARD: target is ahead and we need to close distance.
+            // localFwd threshold widened to -0.25 to avoid death zone.
+            boolean wantForward = tooFar && localFwd > -0.25D;
+            // BACKWARD: target is behind us (we overshot) and too close.
+            boolean wantBackward = tooClose && localFwd < -0.15D;
+            // HOLD: neither forward nor backward — strafe around target.
+            movement.forward(wantForward);
+            movement.backward(wantBackward);
             movement.strafe((float)(localStr * 0.60D + strafe * (tooClose ? 0.45F : 0.30F)));
-            movement.sprint(self.onGround && yawError < 24.0F && distance > tacticalState.preferredDistance);
+            movement.sprint(self.onGround && tooFar && localFwd > 0.3D);
         } else {
-            movement.forward(localFwd > -0.10D);
-            movement.backward(localFwd < -0.35D);
+            // Not visible or far away: move toward target direction broadly.
+            boolean wantForward = localFwd > -0.25D;
+            boolean wantBackward = localFwd < -0.50D && distance < preferred;
+            movement.forward(wantForward);
+            movement.backward(wantBackward);
             movement.strafe((float)(localStr * 0.55D));
-            movement.sprint(self.onGround && yawError < 20.0F);
+            movement.sprint(self.onGround && localFwd > 0.5D);
         }
         movement.attack(false);
 
         // Debug: log conversion for HUD
-        combatDebug = String.format("route=(%.2f,%.2f) yaw=%.0f localFwd=%.2f localStr=%.2f fwd=%s bk=%s str=%.2f",
-                route.x, route.z, self.rotationYaw, localFwd, localStr,
-                localFwd > 0.05D, localFwd < -0.25D, localStr);
+        combatDebug = String.format("APR route=(%.2f,%.2f) yaw=%.0f localFwd=%.2f localStr=%.2f",
+                route.x, route.z, self.rotationYaw, localFwd, localStr);
     }
 
     private boolean shouldCombatJump(EntityPlayerSP self, EntityPlayer target, double distance,
                                      CombatTacticalModel.State tacticalState) {
-        return distance > 2.55D
-                && distance < 4.0D
+        // Standard combat jump for maintaining melee spacing
+        boolean standardJump = distance > 2.55D && distance < 4.0D
                 && tacticalState.verticalDistance < 1.15D
                 && Math.abs(tacticalState.closingRate) < 2.8D;
+        if (standardJump) return true;
+
+        // Obstacle jump: if there's a block in the way toward the target and we
+        // are close enough, jump to get over it.
+        if (distance < 3.5D && self.onGround) {
+            double dx = target.posX - self.posX;
+            double dz = target.posZ - self.posZ;
+            double hLen = Math.sqrt(dx * dx + dz * dz);
+            if (hLen > 0.001D) {
+                int bx = (int) Math.round(self.posX + dx / hLen);
+                int bz = (int) Math.round(self.posZ + dz / hLen);
+                net.minecraft.util.BlockPos probe = new net.minecraft.util.BlockPos(bx, (int) self.posY, bz);
+                // Check if there's a solid block at foot/head level ahead
+                boolean blocked = !com.atlasdead.wanderbot.pathfinding.PathFinder.canOccupy(self.worldObj, probe)
+                        || !com.atlasdead.wanderbot.pathfinding.PathFinder.canOccupy(self.worldObj, probe.up());
+                if (blocked) return true;
+            }
+        }
+        return false;
     }
 
     private float chooseStrafe(EntityPlayerSP self, EntityPlayer target) {
