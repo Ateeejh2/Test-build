@@ -70,8 +70,8 @@ public class KillAura {
 
     /** Sync settings from WanderBotSettings. */
     private void syncSettings() {
-        attackRange = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraAttackRange;
-        swingRange = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSwingRange;
+        attackRange = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraAttackRange;
+        swingRange = (float)com.atlasdead.wanderbot.config.WanderBotSettings.killAuraSwingRange;
         minCPS = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMinCPS;
         maxCPS = com.atlasdead.wanderbot.config.WanderBotSettings.killAuraMaxCPS;
         rotationMode = RotationMode.values()[com.atlasdead.wanderbot.config.WanderBotSettings.killAuraRotationMode];
