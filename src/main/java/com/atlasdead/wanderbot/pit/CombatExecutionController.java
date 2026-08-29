@@ -157,23 +157,65 @@ public class CombatExecutionController {
     }
 
     /**
-     * Create a MovingObjectPosition pointing at the target's bounding box center.
+     * Create a MovingObjectPosition pointing at the target entity.
      * Used to set mc.objectMouseOver before calling mc.clickMouse().
-     * This makes clickMouse() treat the click as hitting the target entity.
+     * MovingObjectPosition(Vec3, EnumFacing, Entity) is the entity hit constructor.
      */
     private static MovingObjectPosition createAttackMOP(EntityPlayerSP self, EntityPlayer target) {
-        double borderSize = target.getCollisionBorderSize();
-        AxisAlignedBB box = target.getEntityBoundingBox().expand(borderSize, borderSize, borderSize);
         double eyeY = self.posY + self.getEyeHeight();
         Vec3 eyePos = new Vec3(self.posX, eyeY, self.posZ);
-        // Aim at box center
-        Vec3 center = new Vec3(
-                (box.minX + box.maxX) / 2.0D,
-                (box.minY + box.maxY) / 2.0D,
-                (box.minZ + box.maxZ) / 2.0D);
-        // Return entity hit with blockPosition set to target's feet for entity type
-        BlockPos blockPos = new BlockPos(target.posX, target.posY, target.posZ);
-        return new MovingObjectPosition(blockPos, net.minecraft.util.EnumFacing.UP, target);
+        Vec3 targetPos = new Vec3(target.posX, target.posY + target.height * 0.5D, target.posZ);
+        return new MovingObjectPosition(targetPos, net.minecraft.util.EnumFacing.UP, target);
+    }
+
+    // Reflection cache for accessing private Minecraft fields/methods
+    private static java.lang.reflect.Field rightClickDelayField;
+    private static java.lang.reflect.Method clickMouseMethod;
+    private static boolean reflectionInitialized = false;
+
+    private static void initReflection() {
+        if (reflectionInitialized) return;
+        reflectionInitialized = true;
+        try {
+            rightClickDelayField = Minecraft.class.getDeclaredField("rightClickDelayTimer");
+            rightClickDelayField.setAccessible(true);
+        } catch (Exception e) {
+            // Try SRG name
+            try {
+                rightClickDelayField = Minecraft.class.getDeclaredField("field_71429_W");
+                rightClickDelayField.setAccessible(true);
+            } catch (Exception ignored) {}
+        }
+        try {
+            clickMouseMethod = Minecraft.class.getDeclaredMethod("clickMouse");
+            clickMouseMethod.setAccessible(true);
+        } catch (Exception e) {
+            // Try SRG name
+            try {
+                clickMouseMethod = Minecraft.class.getDeclaredMethod("func_147116_af");
+                clickMouseMethod.setAccessible(true);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** Set rightClickDelayTimer to 0 via reflection so clickMouse() fires. */
+    private static void resetClickDelay(Minecraft mc) {
+        try {
+            initReflection();
+            if (rightClickDelayField != null) {
+                rightClickDelayField.setInt(mc, 0);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** Call mc.clickMouse() via reflection. */
+    private static void invokeClickMouse(Minecraft mc) {
+        try {
+            initReflection();
+            if (clickMouseMethod != null) {
+                clickMouseMethod.invoke(mc);
+            }
+        } catch (Exception ignored) {}
     }
 
 
@@ -349,7 +391,7 @@ public class CombatExecutionController {
         }
 
         // Direct attack: use mc.clickMouse() for vanilla-exact behavior.
-        // We set objectMouseOver to point at the target first, then call clickMouse().
+        // We set objectMouseOver to point at the target, then call clickMouse().
         // clickMouse() handles C02, swing, damage calc, rightClickDelayTimer —
         // everything a real player left-click does. Zero manual packets.
         if (combatState == CombatState.ATTACK_READY && !suppressAttack
@@ -358,9 +400,10 @@ public class CombatExecutionController {
             MovingObjectPosition savedMOP = mc.objectMouseOver;
             try {
                 mc.objectMouseOver = createAttackMOP(self, target);
-                // Reset rightClickDelayTimer so clickMouse() actually fires
-                mc.rightClickDelayTimer = 0;
-                mc.clickMouse();
+                // Reset rightClickDelayTimer via reflection so clickMouse() fires
+                resetClickDelay(mc);
+                // Call clickMouse() via reflection — same pipeline as real mouse click
+                invokeClickMouse(mc);
             } finally {
                 mc.objectMouseOver = savedMOP;
             }
