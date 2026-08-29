@@ -1,8 +1,0 @@
-Combat v7
-- Combat Position Planner chooses a tactical point around the target instead of always routing directly at the target.
-- Uses target velocity and short-term lead, with conservative lead when a reversal is detected.
-- Crowd pressure can select a cutoff position instead of a direct chase line.
-- Retreat produces a safety-oriented position behind the current movement vector.
-- Terrain is checked before committing to the position; local avoidance can replace unsafe probes.
-- Combat Recovery Route Planner rebuilds a route goal when the target moves, the route blocks, terrain changes, or crowd pressure changes.
-- All logic remains ordinary client movement/navigation logic; no packet injection or anti-cheat bypass is included.
