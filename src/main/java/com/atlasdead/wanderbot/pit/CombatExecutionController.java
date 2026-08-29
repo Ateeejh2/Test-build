@@ -298,7 +298,7 @@ public class CombatExecutionController {
 
         return publishState(new State(action.name(), distance, yawError, pitchError, visible,
                 combatState == CombatState.COOLDOWN,
-                aim.aligned, inRange,
+                rotationAlignedTick >= ROTATION_MIN_DELAY, inRange,
                 canAttackNow,
                 attackTimer, controlDecision.reason));
     }
