@@ -3,6 +3,8 @@ package com.atlasdead.wanderbot.pit;
 import com.atlasdead.wanderbot.bot.MovementController;
 import com.atlasdead.wanderbot.pathfinding.Path;
 import com.atlasdead.wanderbot.pathfinding.PathFinder;
+import com.atlasdead.wanderbot.pathfinding.PathNode;
+import com.atlasdead.wanderbot.rotation.RotationController;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.scoreboard.ScoreObjective;
@@ -32,6 +34,7 @@ public final class PitStartupSequence {
     private final Minecraft mc;
     private final MovementController movement;
     private final PathFinder pathFinder;
+    private final RotationController rotation;
     private final Random random = new Random();
 
     private State state = State.CHECK_PIT;
@@ -44,10 +47,12 @@ public final class PitStartupSequence {
     private double dropPrevY;
     private int dropTicks;
 
-    public PitStartupSequence(Minecraft mc, MovementController movement, PathFinder pathFinder) {
+    public PitStartupSequence(Minecraft mc, MovementController movement, PathFinder pathFinder,
+                              RotationController rotation) {
         this.mc = mc;
         this.movement = movement;
         this.pathFinder = pathFinder;
+        this.rotation = rotation;
     }
 
     public void reset() {
@@ -60,6 +65,7 @@ public final class PitStartupSequence {
         dropBaselineY = 0.0D;
         dropPrevY = 0.0D;
         dropTicks = 0;
+        rotation.reset();
     }
 
     public boolean isComplete() { return state == State.COMPLETE; }
@@ -109,10 +115,7 @@ public final class PitStartupSequence {
                     completeStartup();
                     return;
                 }
-
-                if (goal == null) {
-                    buildMidPath(player);
-                }
+                if (goal == null) buildMidPath(player);
                 followPath(player);
                 if (isExactlyAtGoal(player)) {
                     path = null;
@@ -126,10 +129,7 @@ public final class PitStartupSequence {
                 movement.backward(false);
                 movement.strafe(0.0F);
                 movement.sprint(false);
-
-                if (detectDrop(player)) {
-                    completeStartup();
-                }
+                if (detectDrop(player)) completeStartup();
                 return;
 
             case COMPLETE:
@@ -187,34 +187,37 @@ public final class PitStartupSequence {
         if (path == null || path.isFinished()) return;
 
         while (!path.isFinished()) {
-            BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
-            if (nearNode(player, p, 0.55D)) path.advance(); else break;
+            PathNode current = path.current();
+            if (current == null) break;
+            if (nearNode(player, new BlockPos(current.x, current.y, current.z), 0.55D)) path.advance();
+            else break;
         }
         if (path.isFinished()) return;
 
-        BlockPos p = new BlockPos(path.current().x, path.current().y, path.current().z);
-        double dx = p.getX() + 0.5D - player.posX;
-        double dz = p.getZ() + 0.5D - player.posZ;
+        PathNode current = path.current();
+        if (current == null) return;
+
+        double targetX = current.x + 0.5D;
+        double targetY = current.y + 1.0D;
+        double targetZ = current.z + 0.5D;
+
+        double dx = targetX - player.posX;
+        double dz = targetZ - player.posZ;
         double len = Math.sqrt(dx * dx + dz * dz);
         if (len < 0.001D) return;
 
-        double yaw = Math.atan2(-dx, dz) * 180.0D / Math.PI;
-        double yawDiff = wrapDegrees(yaw - player.rotationYaw);
-        double rad = Math.toRadians(yaw);
-        double forward = (-Math.sin(rad)) * (dx / len) + Math.cos(rad) * (dz / len);
-        double strafe = Math.cos(rad) * (dx / len) + Math.sin(rad) * (dz / len);
+        // Deterministic humanized/eased rotation toward the exact active waypoint.
+        float yawError = rotation.tickPath(player, targetX, targetY, targetZ);
+        double yawRad = Math.toRadians(player.rotationYaw);
+        double localForward = dx * (-Math.sin(yawRad)) + dz * Math.cos(yawRad);
+        double localStrafe = dx * Math.cos(yawRad) + dz * Math.sin(yawRad);
 
-        player.rotationYaw = (float) yaw;
-        player.rotationYawHead = (float) yaw;
+        movement.forward(localForward > -0.2D && yawError < 75.0F);
+        movement.backward(localForward < -0.35D);
+        movement.strafe((float) Math.max(-1.0D, Math.min(1.0D, localStrafe)));
+        movement.sprint(yawError < 35.0F && localForward > 0.45D && player.onGround);
 
-        movement.forward(forward > -0.2D && Math.abs(yawDiff) <= 65.0D);
-        movement.backward(forward < -0.35D);
-        movement.strafe((float) Math.max(-1.0D, Math.min(1.0D, strafe)));
-        movement.sprint(Math.abs(yawDiff) < 25.0D && forward > 0.55D && player.onGround);
-
-        if (path.current().y > player.posY + 0.45D && player.onGround) {
-            movement.jump();
-        }
+        if (current.y > player.posY + 0.45D && player.onGround) movement.jump();
     }
 
     private void beginDropWatch(EntityPlayerSP player) {
@@ -275,11 +278,5 @@ public final class PitStartupSequence {
         mc.thePlayer.sendChatMessage("/play pit");
         commandSent = true;
         commandSentAt = System.currentTimeMillis();
-    }
-
-    private static double wrapDegrees(double angle) {
-        while (angle <= -180.0D) angle += 360.0D;
-        while (angle > 180.0D) angle -= 360.0D;
-        return angle;
     }
 }
