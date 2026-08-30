@@ -71,11 +71,12 @@ public class TargetTracker {
             return null;
         }
 
-        EntityPlayer nearest = null;
-        double nearestDistance = Double.POSITIVE_INFINITY;
+        // Initial acquisition is score-based, but distance deliberately dominates
+        // the score so a very close opponent is preferred over a much farther
+        // opponent merely because the latter has lower HP or better armor.
+        EntityPlayer best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
 
-        // Initial acquisition only. After this point the target is not replaced
-        // by a closer player during the current engagement.
         for (EntityPlayer candidate : players) {
             if (!isValidCandidate(candidate, self)) continue;
             if (isInSpawn(candidate)) continue;
@@ -83,22 +84,22 @@ public class TargetTracker {
             if (!isEligiblePitArmor(candidate)) continue;
             if (!cachedPathAvailable(world, self, candidate, now)) continue;
 
-            double distance = self.getDistanceToEntity(candidate);
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearest = candidate;
+            double candidateScore = score(world, self, candidate, maxRange);
+            if (candidateScore > bestScore) {
+                bestScore = candidateScore;
+                best = candidate;
             }
         }
 
-        if (nearest == null) {
+        if (best == null) {
             clear();
             return null;
         }
 
-        target = nearest;
-        targetScore = score(world, self, nearest, maxRange);
-        targetArmor = armorProfile(nearest);
-        return nearest;
+        target = best;
+        targetScore = bestScore;
+        targetArmor = armorProfile(best);
+        return best;
     }
 
     /** Check reachability without disturbing the active CombatPathFinder. */
@@ -182,27 +183,38 @@ public class TargetTracker {
     private double score(World world, EntityPlayerSP self, EntityPlayer p, double maxRange) {
         ArmorProfile armor = armorProfile(p);
         double distance = self.getDistanceToEntity(p);
-        double scoreRange = Math.max(32.0D, Math.min(256.0D, distance + 1.0D));
         double health = MathHelper.clamp_float(p.getHealth(), 0.0F, p.getMaxHealth());
         double maxHealth = Math.max(1.0F, p.getMaxHealth());
         double healthRatio = health / maxHealth;
 
-        double score = 0.0D;
-        score += 38.0D * (1.0D - clamp01(distance / scoreRange));
-        score += 26.0D * (1.0D - healthRatio);
-        score += armor.chainPieces * 7.0D;
-        score += armor.ironPieces * 4.0D;
-        score += Math.max(0, 4 - armor.eligiblePieces) * 1.5D;
-        score += self.canEntityBeSeen(p) ? 24.0D : -10.0D;
+        // Distance is the primary target-selection signal.
+        // 0 blocks = 100 points, 10 blocks = 70, 20 blocks = 40, 30+ = 10 or less.
+        // The remaining factors are intentionally too small to overpower a large
+        // distance disadvantage.
+        double distanceScore = Math.max(0.0D, 100.0D - distance * 3.0D);
+        double healthScore = (1.0D - healthRatio) * 18.0D;
+        double visibilityScore = self.canEntityBeSeen(p) ? 10.0D : -6.0D;
+        double armorScore = Math.min(7.0D,
+                armor.chainPieces * 2.0D + armor.ironPieces * 1.0D);
 
         double vertical = Math.abs(self.posY - p.posY);
-        score -= Math.min(10.0D, vertical * 2.5D);
+        double verticalPenalty = Math.min(8.0D, vertical * 1.5D);
 
         int pressure = countEligiblePlayersNear(world, self, p, 6.0D);
-        score -= pressure * 8.0D;
+        double pressurePenalty = Math.min(8.0D, pressure * 2.0D);
 
-        if (distance < 2.25D) score -= (2.25D - distance) * 6.0D;
-        return score;
+        // Keep the scan range meaningful when callers request a smaller range.
+        double rangePenalty = maxRange > 0.0D && distance > maxRange
+                ? Math.min(50.0D, (distance - maxRange) * 4.0D)
+                : 0.0D;
+
+        return distanceScore
+                + healthScore
+                + visibilityScore
+                + armorScore
+                - verticalPenalty
+                - pressurePenalty
+                - rangePenalty;
     }
 
     private int countEligiblePlayersNear(World world, EntityPlayerSP self, EntityPlayer targetPlayer, double radius) {
@@ -218,10 +230,6 @@ public class TargetTracker {
             if (isEligiblePitArmor(player) && player.getDistanceToEntity(targetPlayer) <= radius) count++;
         }
         return count;
-    }
-
-    private double clamp01(double value) {
-        return Math.max(0.0D, Math.min(1.0D, value));
     }
 
     public EntityPlayer getTarget() { return target; }
