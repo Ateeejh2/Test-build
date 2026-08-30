@@ -5,9 +5,9 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.util.MathHelper;
 
 /**
- * Rotation controller with normal humanized combat rotation and a deterministic
- * smooth path-rotation mode. Path rotation deliberately avoids random target
- * offsets so the view remains aligned with the rendered waypoint.
+ * Rotation controller with normal humanized combat rotation and deterministic
+ * path-following yaw control. Path rotation never owns pitch because a movement
+ * checkpoint is a locomotion target, not an aiming target.
  */
 public class RotationController {
     private float yawVelocity;
@@ -50,8 +50,7 @@ public class RotationController {
         }
 
         noise = noise * 0.88F + (float)((Math.random() - 0.5D) * 0.18D);
-        float jitter = Humanizer.microJitter();
-        targetYaw += noise + jitter;
+        targetYaw += noise + Humanizer.microJitter();
 
         float delta = MathHelper.wrapAngleTo180_float(targetYaw - player.rotationYaw);
         lastYawError = Math.abs(delta);
@@ -87,20 +86,20 @@ public class RotationController {
     }
 
     /**
-     * Deterministic smooth rotation used when following a rendered path.
-     * The target is always derived from the current waypoint so steering and
-     * rendered checkpoints stay synchronized. No persistent secondary target
-     * is used here because that can introduce lag/oscillation near checkpoints.
+     * Deterministic path-following yaw. The target is the horizontal direction
+     * of the active checkpoint; pitch is intentionally untouched.
      */
     public float tickPath(EntityPlayerSP player, double targetX, double targetY, double targetZ) {
         double dx = targetX - player.posX;
-        double dy = targetY - (player.posY + player.getEyeHeight());
         double dz = targetZ - player.posZ;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
-        if (horizontal < 0.001D) return lastYawError;
+        if (horizontal < 0.001D) {
+            yawVelocity = 0.0F;
+            lastYawError = 0.0F;
+            return 0.0F;
+        }
 
         float targetYaw = (float)(Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
-        float targetPitch = (float)(-(Math.atan2(dy, horizontal) * 180.0D / Math.PI));
         float delta = MathHelper.wrapAngleTo180_float(targetYaw - player.rotationYaw);
         lastYawError = Math.abs(delta);
 
@@ -116,15 +115,13 @@ public class RotationController {
         yawVelocity = approach(yawVelocity, desired, acceleration);
 
         float step = Math.min(lastYawError, Math.max(0.75F, Math.abs(yawVelocity)));
+        if (lastYawError <= 1.5F) step = Math.min(step, 0.6F);
         player.rotationYaw += delta < 0.0F ? -step : step;
         player.rotationYawHead = player.rotationYaw;
         player.renderYawOffset = player.rotationYaw;
 
-        float pitchDelta = MathHelper.wrapAngleTo180_float(targetPitch - player.rotationPitch);
-        float desiredPitch = Math.max(-4.0F, Math.min(4.0F, pitchDelta * 0.32F));
-        pitchVelocity = approach(pitchVelocity, desiredPitch, 1.2F);
-        player.rotationPitch += pitchVelocity;
-        player.rotationPitch = Math.max(-89.0F, Math.min(89.0F, player.rotationPitch));
+        // Do not modify pitch here. A checkpoint directly below the eye is still
+        // a horizontal movement waypoint and should never pull the camera down.
         return lastYawError;
     }
 
