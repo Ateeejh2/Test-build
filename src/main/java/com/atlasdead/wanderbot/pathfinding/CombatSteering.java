@@ -94,7 +94,12 @@ public class CombatSteering {
         return new Result(wantForward, wantBackward, strafeAmount, sprint, jump, reason);
     }
 
-    /** Advance reached nodes using a slightly wider tolerance on straight paths. */
+    /**
+     * Advance monotonically. A checkpoint is considered passed when the player
+     * has either reached its vicinity or crossed the checkpoint plane in the
+     * direction of travel. This prevents corridor steering from making the bot
+     * turn back toward an already-passed checkpoint.
+     */
     private void advanceReached(Path path, EntityPlayerSP self) {
         while (!path.isFinished()) {
             PathNode current = path.current();
@@ -114,8 +119,47 @@ public class CombatSteering {
                 path.advance();
                 continue;
             }
+
+            if (hasPassedCheckpoint(path, self, current)) {
+                path.advance();
+                continue;
+            }
+
             break;
         }
+    }
+
+    private boolean hasPassedCheckpoint(Path path, EntityPlayerSP self, PathNode current) {
+        int index = path.getIndex();
+        if (index <= 0) return false;
+
+        PathNode previous = path.getNodes().get(index - 1);
+        if (previous.y != current.y) return false;
+
+        double cx = current.x + 0.5D;
+        double cz = current.z + 0.5D;
+        double px = previous.x + 0.5D;
+        double pz = previous.z + 0.5D;
+
+        double dirX = cx - px;
+        double dirZ = cz - pz;
+        double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (len < 0.001D) return false;
+
+        dirX /= len;
+        dirZ /= len;
+
+        // Signed distance beyond the checkpoint along the incoming segment.
+        double fromCheckpointX = self.posX - cx;
+        double fromCheckpointZ = self.posZ - cz;
+        double along = fromCheckpointX * dirX + fromCheckpointZ * dirZ;
+        double lateral = Math.abs(fromCheckpointX * (-dirZ) + fromCheckpointZ * dirX);
+
+        // The player must have crossed the checkpoint plane and remain reasonably
+        // close to the incoming corridor. This is intentionally independent of
+        // the outgoing turn, so a corner is never skipped just because it is
+        // visible around the bend.
+        return along >= 0.12D && lateral <= 0.90D;
     }
 
     /**
