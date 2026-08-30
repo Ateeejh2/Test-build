@@ -25,6 +25,7 @@ import net.minecraft.entity.player.EntityPlayer;
  */
 public class BotController {
     private static final double KILLAURA_RANGE = 3.5D;
+    private static final double DEATH_Y_RISE_THRESHOLD = 8.0D;
 
     private final Minecraft mc;
     private final RotationController rotation = new RotationController();
@@ -42,6 +43,8 @@ public class BotController {
     private boolean killAuraActive;
     private int killAuraChatCooldown;
     private long lastDeathRestartMs;
+    private double previousPlayerY;
+    private boolean previousPlayerYInitialized;
 
     public BotController(Minecraft mc) {
         this.mc = mc;
@@ -71,6 +74,8 @@ public class BotController {
         killAuraActive = false;
         killAuraChatCooldown = 0;
         lastDeathRestartMs = 0L;
+        previousPlayerY = mc.thePlayer.posY;
+        previousPlayerYInitialized = true;
         movement.release();
         movement.releaseJump();
         movement.attack(false);
@@ -84,6 +89,7 @@ public class BotController {
         movement.release();
         movement.releaseJump();
         movement.attack(false);
+        previousPlayerYInitialized = false;
         ensureKillAuraOff();
     }
 
@@ -99,6 +105,35 @@ public class BotController {
         if (now - lastDeathRestartMs < 1000L) return;
         lastDeathRestartMs = now;
 
+        restartAfterDeath();
+    }
+
+    /**
+     * Fallback death detector for cases where the server death chat is not
+     * delivered through ClientChatReceivedEvent. A sudden upward Y jump of
+     * roughly ten blocks is treated as a respawn/death transition.
+     */
+    private boolean detectDeathByYJump(EntityPlayerSP player) {
+        double currentY = player.posY;
+        if (!previousPlayerYInitialized) {
+            previousPlayerY = currentY;
+            previousPlayerYInitialized = true;
+            return false;
+        }
+
+        double deltaY = currentY - previousPlayerY;
+        previousPlayerY = currentY;
+
+        if (deltaY < DEATH_Y_RISE_THRESHOLD) return false;
+        if (currentY < 1.0D) return false;
+
+        long now = System.currentTimeMillis();
+        if (now - lastDeathRestartMs < 1000L) return false;
+        lastDeathRestartMs = now;
+        return true;
+    }
+
+    private void restartAfterDeath() {
         // Always issue the requested KillAura OFF command on death, even if the
         // local state already says it is off.
         sendKillAuraCommand(false);
@@ -116,6 +151,9 @@ public class BotController {
         startupSequence.reset();
         pit.start();
         state = BotState.PLANNING;
+
+        previousPlayerY = mc.thePlayer != null ? mc.thePlayer.posY : 0.0D;
+        previousPlayerYInitialized = mc.thePlayer != null;
     }
 
     public void tick() {
@@ -123,6 +161,13 @@ public class BotController {
         if (state == BotState.OFF) return;
         if (player == null || mc.theWorld == null) {
             stop();
+            return;
+        }
+
+        // Death fallback must run before startup/combat processing so a respawn
+        // detected from position movement immediately resets the whole lifecycle.
+        if (detectDeathByYJump(player)) {
+            restartAfterDeath();
             return;
         }
 
@@ -158,6 +203,8 @@ public class BotController {
             pit.resetForWorldChange();
             startupSequence.reset();
             state = BotState.PLANNING;
+            previousPlayerY = player.posY;
+            previousPlayerYInitialized = true;
             return;
         }
 
@@ -233,6 +280,7 @@ public class BotController {
         movement.attack(false);
         runtimeGuard.reset();
         state = BotState.OFF;
+        previousPlayerYInitialized = false;
         ensureKillAuraOff();
     }
 
