@@ -15,13 +15,7 @@ import java.util.List;
  * what should the bot do with its current target?
  */
 public class CombatDecisionEngine {
-    public enum Action {
-        NONE,
-        APPROACH,
-        ATTACK,
-        DISENGAGE,
-        RETARGET
-    }
+    public enum Action { NONE, APPROACH, ATTACK, DISENGAGE, RETARGET }
 
     public static final class Result {
         public final Action action;
@@ -89,7 +83,6 @@ public class CombatDecisionEngine {
         if (!visible) threat += distance > 7.0D ? 16.0D : 6.0D;
         if (distance > 13.0D) threat += 10.0D * streakRisk;
 
-        // Combat opportunity: closer, visible, lower-HP targets are more attractive.
         double combat = 0.0D;
         combat += Math.max(0.0D, 36.0D - distance * 2.4D);
         combat += (1.0D - targetRatio) * 30.0D;
@@ -103,8 +96,6 @@ public class CombatDecisionEngine {
             combat += armor.ironPieces * 1.5D;
         }
 
-        // Hard safety exits first. The engine intentionally becomes conservative
-        // before the navigation layer is asked to continue chasing the target.
         if (selfRatio <= WanderBotSettings.retreatHealth) {
             return stabilized(new Result(Action.DISENGAGE, threat + 35.0D, combat, "self-low-health"), self, target);
         }
@@ -121,26 +112,14 @@ public class CombatDecisionEngine {
             return stabilized(new Result(Action.DISENGAGE, threat + 10.0D, combat, "bad-height"), self, target);
         }
 
-        // Close-range combat window. Rotation is deliberately checked here too,
-        // so the movement layer does not repeatedly stop/start around a target.
         if (distance <= WanderBotSettings.combatRange && visible && yawError <= 30.0F && vertical < 2.4D) {
             return stabilized(new Result(Action.ATTACK, threat, combat + 14.0D, "attack-window"), self, target);
         }
 
-        // When a different eligible target becomes substantially better, give the
-        // caller permission to drop the current target rather than blindly chasing.
-        EntityPlayer best = targets.findBest(mc.theWorld, self, WanderBotSettings.targetScanRange, zones);
-        if (best != null && best != target) {
-            double bestDistance = self.getDistanceToEntity(best);
-            double bestHealthRatio = healthRatio(best);
-            double candidateBonus = Math.max(0.0D, 24.0D - bestDistance * 1.8D)
-                    + (1.0D - bestHealthRatio) * 18.0D;
-            double switchMargin = streak != null && streak.shouldProtectStreak() ? 15.0D : 10.0D;
-            if (candidateBonus > combat + switchMargin) {
-                return stabilized(new Result(Action.RETARGET, threat, candidateBonus, "better-target"), self, target);
-            }
-        }
-
+        // TargetTracker owns target acquisition and now hard-locks the active
+        // target until it is dead/invalid. Do not perform a second independent
+        // target switch here, otherwise this layer could steal the target slot
+        // mid-fight even though the tracker says it is locked.
         Result raw = new Result(Action.APPROACH, threat, combat, visible ? "approach-visible" : "approach-pathing");
         return stabilized(raw, self, target);
     }
@@ -183,8 +162,6 @@ public class CombatDecisionEngine {
     }
 
     private TargetTracker.ArmorProfile armorOf(EntityPlayer player) {
-        // Delegate armor classification through the tracker without changing its
-        // hard target eligibility rule.
         if (player == targets.getTarget()) return targets.getTargetArmor();
 
         boolean iron = false, chain = false, diamond = false;
