@@ -16,9 +16,9 @@ import java.util.Map;
 /**
  * Target selection for the Pit combat layer.
  *
- * Once a combat target is acquired, it is held until it becomes invalid/dead
- * (or explicitly cleared). Nearby players cannot steal the target slot midway
- * through an engagement.
+ * The active target is reevaluated by score, but never replaced by a tiny score
+ * fluctuation. A target is immediately released once it is dead or otherwise
+ * invalid, so a new target can be acquired promptly after a kill.
  */
 public class TargetTracker {
     private static final double SPAWN_MIN_X = -13.0D;
@@ -28,6 +28,7 @@ public class TargetTracker {
     private static final double SPAWN_MIN_Y = 110.0D;
 
     private static final long PATH_CHECK_CACHE_MS = 750L;
+    private static final double TARGET_SWITCH_MARGIN = 12.0D;
 
     private final CombatPathFinder pathProbe = new CombatPathFinder();
     private final Map<Integer, PathCheck> pathCache = new HashMap<Integer, PathCheck>();
@@ -50,19 +51,19 @@ public class TargetTracker {
 
         long now = System.currentTimeMillis();
 
-        // Hard target lock: once acquired, keep this target for the whole
-        // engagement. We only release it when it is no longer a valid opponent.
+        // The current target remains the preferred target while alive and valid.
+        // It may still be replaced when another valid candidate is substantially
+        // better according to the same score function.
         if (target != null) {
-            if (isValidCandidate(target, self)
-                    && !isInSpawn(target)
-                    && (zones == null || !zones.isPlayerProtected(target))
-                    && isEligiblePitArmor(target)) {
+            if (!isValidCandidate(target, self)
+                    || isInSpawn(target)
+                    || (zones != null && zones.isPlayerProtected(target))
+                    || !isEligiblePitArmor(target)) {
+                clear();
+            } else {
                 targetScore = score(world, self, target, maxRange);
                 targetArmor = armorProfile(target);
-                return target;
             }
-
-            clear();
         }
 
         List<EntityPlayer> players = world.playerEntities;
@@ -71,9 +72,6 @@ public class TargetTracker {
             return null;
         }
 
-        // Initial acquisition is score-based, but distance deliberately dominates
-        // the score so a very close opponent is preferred over a much farther
-        // opponent merely because the latter has lower HP or better armor.
         EntityPlayer best = null;
         double bestScore = Double.NEGATIVE_INFINITY;
 
@@ -94,6 +92,18 @@ public class TargetTracker {
         if (best == null) {
             clear();
             return null;
+        }
+
+        // Keep the current target unless another candidate is clearly better.
+        // This prevents rapid target flicker while still allowing genuinely better
+        // targets to be selected during an ongoing fight.
+        if (target != null && target != best && isValidCandidate(target, self)) {
+            double currentScore = score(world, self, target, maxRange);
+            if (bestScore <= currentScore + TARGET_SWITCH_MARGIN) {
+                targetScore = currentScore;
+                targetArmor = armorProfile(target);
+                return target;
+            }
         }
 
         target = best;
@@ -187,10 +197,8 @@ public class TargetTracker {
         double maxHealth = Math.max(1.0F, p.getMaxHealth());
         double healthRatio = health / maxHealth;
 
-        // Distance is the primary target-selection signal.
-        // 0 blocks = 100 points, 10 blocks = 70, 20 blocks = 40, 30+ = 10 or less.
-        // The remaining factors are intentionally too small to overpower a large
-        // distance disadvantage.
+        // Distance is the dominant signal. Other properties only provide modest
+        // tie-breaking bonuses and cannot easily overpower a large distance gap.
         double distanceScore = Math.max(0.0D, 100.0D - distance * 3.0D);
         double healthScore = (1.0D - healthRatio) * 18.0D;
         double visibilityScore = self.canEntityBeSeen(p) ? 10.0D : -6.0D;
@@ -203,7 +211,6 @@ public class TargetTracker {
         int pressure = countEligiblePlayersNear(world, self, p, 6.0D);
         double pressurePenalty = Math.min(8.0D, pressure * 2.0D);
 
-        // Keep the scan range meaningful when callers request a smaller range.
         double rangePenalty = maxRange > 0.0D && distance > maxRange
                 ? Math.min(50.0D, (distance - maxRange) * 4.0D)
                 : 0.0D;
