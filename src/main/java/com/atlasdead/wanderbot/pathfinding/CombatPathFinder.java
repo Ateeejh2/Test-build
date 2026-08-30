@@ -4,7 +4,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.material.Material;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.BlockPos;
 import net.minecraft.world.World;
 
@@ -21,9 +20,10 @@ import java.util.Set;
 /**
  * Combat-specific A* pathfinder for chasing moving targets.
  *
- * The combat path is authoritative for locomotion.  The target is a moving
- * entity, so the path goal is a standable block near the target rather than
- * the target's exact feet position.
+ * The current path is preserved when a transient replan fails. This prevents
+ * the bot from stopping simply because one target-position update produced no
+ * usable route. The planner models one-block climbs, controlled drops and
+ * diagonal corner clearance.
  */
 public class CombatPathFinder {
     private static final int[][] DIRS = {
@@ -33,34 +33,39 @@ public class CombatPathFinder {
 
     private static final double SQRT2 = 1.4142135623730951D;
     private static final int MAX_STEP_UP = 1;
-    private static final int MAX_DROP = 3;
+    private static final int MAX_DROP = 4;
     private static final double ATTACK_RANGE = 3.2D;
-    private static final double REPLAN_THRESHOLD = 3.0D;
-    private static final int SEARCH_RADIUS = 64;
-    private static final int GOAL_STAND_RADIUS = 5;
+    private static final double REPLAN_THRESHOLD = 4.5D;
+    private static final int REPLAN_TICKS = 30;
+    private static final int SEARCH_RADIUS = 80;
+    private static final int GOAL_STAND_RADIUS = 6;
 
     private Path currentPath;
     private BlockPos currentGoal;
     private int tickSinceReplan;
 
-    private double lastTargetX;
-    private double lastTargetZ;
     private double predictedTargetX;
     private double predictedTargetZ;
     private int predictionTicks;
 
-    /** Returns the current path, rebuilding it when the current goal is stale. */
     public Path getPath(World world, EntityPlayerSP self, EntityPlayer target, int maxNodes) {
-        if (world == null || self == null || target == null) return null;
+        if (world == null || self == null || target == null) return currentPath;
 
         predictTarget(target);
         BlockPos goalPos = computeGoal(self, target);
 
         if (shouldReplan(self, goalPos)) {
-            int effectiveNodes = Math.max(4000, maxNodes);
-            currentPath = findPath(world, self, goalPos, effectiveNodes);
-            currentGoal = goalPos;
-            tickSinceReplan = 0;
+            int effectiveNodes = Math.max(6000, maxNodes);
+            Path candidate = findPath(world, self, goalPos, effectiveNodes);
+            if (candidate != null && !candidate.isFinished()) {
+                currentPath = candidate;
+                currentGoal = goalPos;
+                tickSinceReplan = 0;
+            } else {
+                // Keep the previous usable route rather than stopping on a
+                // transient search failure.
+                tickSinceReplan++;
+            }
         } else {
             tickSinceReplan++;
         }
@@ -74,11 +79,9 @@ public class CombatPathFinder {
         double vx = target.motionX;
         double vz = target.motionZ;
         double speed = Math.sqrt(vx * vx + vz * vz);
-        double predictTime = speed > 0.1D ? 6.0D : 3.0D;
+        double predictTime = speed > 0.10D ? 5.0D : 2.5D;
         predictedTargetX = targetX + vx * predictTime;
         predictedTargetZ = targetZ + vz * predictTime;
-        lastTargetX = targetX;
-        lastTargetZ = targetZ;
         predictionTicks++;
     }
 
@@ -86,10 +89,13 @@ public class CombatPathFinder {
         double dx = predictedTargetX - self.posX;
         double dz = predictedTargetZ - self.posZ;
         double dist = Math.sqrt(dx * dx + dz * dz);
+
         if (dist <= ATTACK_RANGE) {
             return new BlockPos(target.posX, target.posY, target.posZ);
         }
-        double ratio = Math.max(0.0D, (dist - ATTACK_RANGE + 0.35D) / dist);
+
+        double desiredStop = ATTACK_RANGE - 0.25D;
+        double ratio = Math.max(0.0D, (dist - desiredStop) / dist);
         int goalX = (int) Math.floor(self.posX + dx * ratio);
         int goalZ = (int) Math.floor(self.posZ + dz * ratio);
         int goalY = (int) Math.floor(target.posY);
@@ -99,11 +105,10 @@ public class CombatPathFinder {
     private boolean shouldReplan(EntityPlayerSP self, BlockPos newGoal) {
         if (currentPath == null || currentPath.isFinished()) return true;
         if (currentGoal == null) return true;
-        double goalDist = horizontalDistance(
-                new BlockPos(currentGoal.getX(), 0, currentGoal.getZ()),
-                new BlockPos(newGoal.getX(), 0, newGoal.getZ()));
+
+        double goalDist = horizontalDistance(currentGoal, newGoal);
         if (goalDist > REPLAN_THRESHOLD) return true;
-        return tickSinceReplan > 20;
+        return tickSinceReplan >= REPLAN_TICKS;
     }
 
     private Path findPath(World world, EntityPlayerSP self, BlockPos goal, int maxNodes) {
@@ -128,7 +133,7 @@ public class CombatPathFinder {
         PathNode startNode = node(nodes, s);
         startNode.gCost = 0.0D;
         startNode.hCost = heuristic(s, g);
-        best.put(startNode.key(), startNode.gCost);
+        best.put(startNode.key(), 0.0D);
         open.add(startNode);
 
         int expanded = 0;
@@ -138,23 +143,33 @@ public class CombatPathFinder {
             Double known = best.get(current.key());
             if (known != null && current.gCost > known + 0.000001D) continue;
             if (!closed.add(current.key())) continue;
+
             if (same(current, g)) return buildPath(current);
 
             BlockPos cp = new BlockPos(current.x, current.y, current.z);
+            int prevDx = current.parent == null ? 0 : Integer.signum(current.x - current.parent.x);
+            int prevDz = current.parent == null ? 0 : Integer.signum(current.z - current.parent.z);
+
             for (int[] dir : DIRS) {
                 int dx = dir[0];
                 int dz = dir[1];
+
                 if (dx != 0 && dz != 0 && !cornerClear(world, cp, dx, dz)) continue;
 
                 BlockPos next = findBestDestination(world, cp, dx, dz);
                 if (next == null) continue;
-                if (Math.abs(next.getX() - s.getX()) > SEARCH_RADIUS) continue;
-                if (Math.abs(next.getZ() - s.getZ()) > SEARCH_RADIUS) continue;
-                if (Math.abs(next.getY() - s.getY()) > 10) continue;
+
+                if (Math.abs(next.getX() - s.getX()) > SEARCH_RADIUS
+                        || Math.abs(next.getZ() - s.getZ()) > SEARCH_RADIUS
+                        || Math.abs(next.getY() - s.getY()) > 12) {
+                    continue;
+                }
 
                 String k = key(next);
                 if (closed.contains(k)) continue;
-                double edge = edgeCost(world, cp, next, g);
+
+                int openDirs = localOpenSpace(world, next);
+                double edge = edgeCost(world, cp, next, prevDx, prevDz, g, openDirs);
                 double candidate = current.gCost + edge;
                 Double old = best.get(k);
                 if (old == null || candidate < old - 0.000001D) {
@@ -167,6 +182,7 @@ public class CombatPathFinder {
                 }
             }
         }
+
         return null;
     }
 
@@ -174,20 +190,50 @@ public class CombatPathFinder {
         int x = from.getX() + dx;
         int z = from.getZ() + dz;
         BlockPos same = new BlockPos(x, from.getY(), z);
-        if (canOccupy(world, same)) return same;
+        if (canOccupy(world, same) && safeTransition(world, from, same)) return same;
 
+        // A one-block obstacle can be climbed by jumping onto its top.
         BlockPos up = same.up();
-        if (up.getY() - from.getY() <= MAX_STEP_UP && canOccupy(world, up)) return up;
+        if (up.getY() - from.getY() <= MAX_STEP_UP
+                && canOccupy(world, up)
+                && safeTransition(world, from, up)) {
+            return up;
+        }
 
+        // Controlled drops for stairs, ledges and uneven terrain.
         for (int drop = 1; drop <= MAX_DROP; drop++) {
             BlockPos down = same.down(drop);
-            if (canOccupy(world, down) && isSafeDrop(world, down, MAX_DROP)) return down;
+            if (canOccupy(world, down) && safeTransition(world, from, down)) return down;
         }
+
         return null;
     }
 
+    private static boolean safeTransition(World world, BlockPos from, BlockPos to) {
+        int dy = to.getY() - from.getY();
+        if (dy > MAX_STEP_UP || dy < -MAX_DROP) return false;
+        if (dy < 0) {
+            int fall = 0;
+            for (int y = from.getY() - 1; y >= to.getY(); y--) {
+                fall++;
+                BlockPos probe = new BlockPos(to.getX(), y, to.getZ());
+                if (isSolidFloor(world, probe)) return fall <= MAX_DROP + 1;
+                if (!isClearColumn(world, probe)) return false;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean cornerClear(World world, BlockPos from, int dx, int dz) {
+        // Both side cells must be traversable. This prevents clipping the corner
+        // of two structures during diagonal movement.
+        return canOccupy(world, from.add(dx, 0, 0))
+                && canOccupy(world, from.add(0, 0, dz));
+    }
+
     public static boolean canOccupy(World world, BlockPos feet) {
-        if (world == null || feet.getY() <= 1 || feet.getY() >= world.getHeight() - 3) return false;
+        if (world == null || feet == null || feet.getY() <= 1 || feet.getY() >= world.getHeight() - 3) return false;
         if (!clearAt(world, feet) || !clearAt(world, feet.up())) return false;
         return isSolidFloor(world, feet.down());
     }
@@ -208,24 +254,21 @@ public class CombatPathFinder {
         return block.isOpaqueCube() || block.isFullBlock() || material.blocksMovement();
     }
 
-    private static boolean isSafeDrop(World world, BlockPos feet, int maxDrop) {
-        if (!canOccupy(world, feet)) return false;
-        int depth = 0;
-        for (int y = feet.getY() - 1; y >= Math.max(1, feet.getY() - maxDrop - 1); y--) {
-            if (isSolidFloor(world, new BlockPos(feet.getX(), y, feet.getZ()))) return depth <= maxDrop;
-            if (!clearAt(world, new BlockPos(feet.getX(), y, feet.getZ()))) return false;
-            depth++;
-        }
-        return false;
+    private static boolean isClearColumn(World world, BlockPos pos) {
+        return clearAt(world, pos) && clearAt(world, pos.up());
     }
 
-    private static boolean cornerClear(World world, BlockPos from, int dx, int dz) {
-        return canOccupy(world, from.add(dx, 0, 0))
-                && canOccupy(world, from.add(0, 0, dz));
+    private static int localOpenSpace(World world, BlockPos p) {
+        int count = 0;
+        for (int[] d : DIRS) {
+            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
+        }
+        return count;
     }
 
     private static BlockPos findStandNear(World world, BlockPos p, int radius) {
         if (canOccupy(world, p)) return p;
+
         BlockPos best = null;
         double bestScore = Double.POSITIVE_INFINITY;
         for (int dx = -radius; dx <= radius; dx++) {
@@ -233,7 +276,10 @@ public class CombatPathFinder {
                 for (int dy = -3; dy <= 3; dy++) {
                     BlockPos c = p.add(dx, dy, dz);
                     if (!canOccupy(world, c)) continue;
-                    double score = dx * dx + dz * dz + Math.abs(dy) * 2.5D;
+                    int open = localOpenSpace(world, c);
+                    double score = dx * dx + dz * dz + Math.abs(dy) * 2.0D;
+                    if (open <= 1) score += 12.0D;
+                    else if (open == 2) score += 4.0D;
                     if (score < bestScore) {
                         bestScore = score;
                         best = c;
@@ -244,26 +290,42 @@ public class CombatPathFinder {
         return best;
     }
 
+    private static double edgeCost(World world, BlockPos from, BlockPos to,
+                                   int prevDx, int prevDz, BlockPos goal, int openDirs) {
+        int dx = Integer.signum(to.getX() - from.getX());
+        int dz = Integer.signum(to.getZ() - from.getZ());
+        int dy = to.getY() - from.getY();
+        double cost = (dx != 0 && dz != 0) ? SQRT2 : 1.0D;
+
+        if (dy > 0) cost += 0.80D;
+        if (dy < 0) cost += 0.22D;
+
+        if (prevDx != 0 || prevDz != 0) {
+            int dot = prevDx * dx + prevDz * dz;
+            if (dot < 0) cost += 7.0D;
+            else if (dot == 0) cost += 0.45D;
+            else if (prevDx != dx || prevDz != dz) cost += 0.10D;
+        }
+
+        if (openDirs <= 1) cost += 8.0D;
+        else if (openDirs == 2) cost += 2.5D;
+        else if (openDirs == 3) cost += 0.6D;
+        else if (openDirs >= 7) cost -= 0.05D;
+
+        double before = horizontalDistance(from, goal);
+        double after = horizontalDistance(to, goal);
+        if (after > before + 1.25D) cost += 0.45D;
+
+        return Math.max(0.05D, cost);
+    }
+
     private static double heuristic(BlockPos a, BlockPos b) {
         double dx = Math.abs(a.getX() - b.getX());
         double dz = Math.abs(a.getZ() - b.getZ());
         double diagonal = Math.min(dx, dz) * SQRT2;
         double straight = Math.max(dx, dz) - Math.min(dx, dz);
         double dy = Math.abs(a.getY() - b.getY());
-        return diagonal + straight + dy * 1.20D;
-    }
-
-    private static double edgeCost(World world, BlockPos from, BlockPos to, BlockPos goal) {
-        int dx = Integer.signum(to.getX() - from.getX());
-        int dz = Integer.signum(to.getZ() - from.getZ());
-        int dy = to.getY() - from.getY();
-        double cost = (dx != 0 && dz != 0) ? SQRT2 : 1.0D;
-        if (dy > 0) cost += 0.95D;
-        if (dy < 0) cost += 0.18D;
-        double before = horizontalDistance(from, goal);
-        double after = horizontalDistance(to, goal);
-        if (after > before + 1.25D) cost += 0.35D;
-        return Math.max(0.05D, cost);
+        return diagonal + straight + dy * 1.25D;
     }
 
     private static double horizontalDistance(BlockPos a, BlockPos b) {
