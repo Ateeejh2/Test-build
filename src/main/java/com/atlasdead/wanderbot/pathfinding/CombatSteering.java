@@ -5,6 +5,7 @@ import net.minecraft.block.material.Material;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.util.BlockPos;
 import net.minecraft.util.MathHelper;
+import net.minecraft.world.World;
 
 /**
  * Converts the authoritative CombatPath into movement inputs.
@@ -37,8 +38,6 @@ public class CombatSteering {
     public Result compute(EntityPlayerSP self, Path path, double targetDistance) {
         if (self == null || path == null || path.isFinished()) return Result.idle();
 
-        // Consume every waypoint that is genuinely reached. Vertical tolerance
-        // is slightly wider because the player can be airborne while entering a node.
         while (!path.isFinished()) {
             PathNode current = path.current();
             if (current == null) break;
@@ -74,17 +73,14 @@ public class CombatSteering {
 
         boolean wantForward = localForward > 0.05D;
         boolean wantBackward = localForward < -0.55D;
-
-        // Keep lateral correction modest when the waypoint is mostly ahead.
         float strafeAmount = (float) MathHelper.clamp_double(localStrafe * 1.55D, -1.0D, 1.0D);
         if (Math.abs(localForward) > 0.70D) strafeAmount *= 0.20F;
 
-        // CombatPath is intentionally sprint-first. The controller above may
-        // still disable it while airborne, but we never gate sprint on target distance.
+        // CombatPath is sprint-first; only airborne state suppresses the key.
         boolean sprint = self.onGround && wantForward;
 
-        // Jump for an elevated waypoint or for a one-block obstruction directly
-        // in the movement corridor. This complements the A* vertical transitions.
+        // Jump both for explicit vertical path steps and for a one-block obstacle
+        // directly ahead where the destination above it is clear.
         boolean jump = dy > 0.30D || needsJumpForObstacle(self, dx, dz);
 
         String reason = buildReason(wantForward, wantBackward, strafeAmount, sprint, jump, horizontalDist);
@@ -99,33 +95,48 @@ public class CombatSteering {
         double ndz = dz / dist;
         int baseY = MathHelper.floor_double(self.posY + 0.05D);
 
-        // Probe the player's actual corridor at several distances. A blocked
-        // feet/head column with a clear one-block-higher destination is a jump.
         for (double probe = 0.45D; probe <= 1.35D; probe += 0.30D) {
-            int bx = MathHelper.floor_double(self.posX + ndx * probe + 0.5D);
-            int bz = MathHelper.floor_double(self.posZ + ndz * probe + 0.5D);
+            int bx = MathHelper.floor_double(self.posX + ndx * probe);
+            int bz = MathHelper.floor_double(self.posZ + ndz * probe);
             BlockPos feet = new BlockPos(bx, baseY, bz);
             BlockPos head = feet.up();
-            BlockPos jumpFeet = feet.up();
-            BlockPos jumpHead = feet.up(2);
+            BlockPos landingFeet = feet.up();
+            BlockPos landingHead = feet.up(2);
 
-            if ((!isClear(self.worldObj, feet) || !isClear(self.worldObj, head))
-                    && isClear(self.worldObj, jumpFeet)
-                    && isClear(self.worldObj, jumpHead)
-                    && PathFinder.isSolidFloor(self.worldObj, feet)) {
+            // A one-block-high obstacle: the current feet space is blocked,
+            // the block above it is clear, and the top provides support.
+            if (!isClear(self.worldObj, feet)
+                    && isClear(self.worldObj, landingFeet)
+                    && isClear(self.worldObj, landingHead)
+                    && isSolidFloor(self.worldObj, feet)) {
+                return true;
+            }
+
+            // Also handle a blocked head corridor when the next higher column
+            // is open, which can occur at the edge of compact structures.
+            if (!isClear(self.worldObj, head)
+                    && isClear(self.worldObj, landingHead)) {
                 return true;
             }
         }
         return false;
     }
 
-    private boolean isClear(net.minecraft.world.World world, BlockPos pos) {
+    private boolean isClear(World world, BlockPos pos) {
         if (world == null) return false;
         Block block = world.getBlockState(pos).getBlock();
         Material material = block.getMaterial();
         if (material == Material.air || block.isAir(world, pos)) return true;
         if (material.isLiquid()) return false;
         return !material.blocksMovement();
+    }
+
+    private boolean isSolidFloor(World world, BlockPos pos) {
+        if (world == null || pos.getY() <= 0 || pos.getY() >= world.getHeight()) return false;
+        Block block = world.getBlockState(pos).getBlock();
+        Material material = block.getMaterial();
+        if (material == Material.air || material.isLiquid() || block.isAir(world, pos)) return false;
+        return block.isOpaqueCube() || block.isFullBlock() || material.blocksMovement();
     }
 
     private String buildReason(boolean forward, boolean backward, float strafe, boolean sprint, boolean jump, double dist) {
