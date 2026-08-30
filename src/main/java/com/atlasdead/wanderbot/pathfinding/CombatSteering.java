@@ -9,8 +9,11 @@ import net.minecraft.world.World;
 
 /**
  * Converts the authoritative CombatPath into movement inputs.
- * Movement, jump decisions, and waypoint progression are based on the same
- * active path so the rendered route and actual steering stay synchronized.
+ *
+ * Steering is deterministic: there is no random rotation or random movement.
+ * The controller anticipates upcoming turns, avoids unnecessary left/right
+ * oscillation and eases through corners instead of snapping from checkpoint to
+ * checkpoint.
  */
 public class CombatSteering {
     public static final class Result {
@@ -35,12 +38,20 @@ public class CombatSteering {
         }
     }
 
-    public Result compute(EntityPlayerSP self, Path path, double targetDistance) {
-        if (self == null || path == null || path.isFinished()) return Result.idle();
+    // Deterministic input hysteresis. This prevents a target direction that is
+    // nearly centered from producing L/R/L/R key chatter every tick.
+    private int lastStrafeDirection;
+    private int strafeHoldTicks;
 
-        // Consume checkpoints as they are reached. A small amount of lookahead
-        // is allowed only when the next checkpoint continues in nearly the same
-        // direction; turn checkpoints and height transitions remain intact.
+    public Result compute(EntityPlayerSP self, Path path, double targetDistance) {
+        if (self == null || path == null || path.isFinished()) {
+            resetInputState();
+            return Result.idle();
+        }
+
+        // Consume checkpoints as they are reached. We may skip one checkpoint
+        // only when the following segment continues in essentially the same
+        // direction and the player is already close to it.
         while (!path.isFinished()) {
             PathNode current = path.current();
             if (current == null) break;
@@ -59,13 +70,65 @@ public class CombatSteering {
             }
         }
 
-        if (path.isFinished()) return new Result(false, false, 0.0F, false, false, "path-finished");
+        if (path.isFinished()) {
+            resetInputState();
+            return new Result(false, false, 0.0F, false, false, "path-finished");
+        }
 
         PathNode waypoint = path.current();
-        if (waypoint == null) return Result.idle();
+        if (waypoint == null) {
+            resetInputState();
+            return Result.idle();
+        }
 
-        double dx = waypoint.x + 0.5D - self.posX;
-        double dz = waypoint.z + 0.5D - self.posZ;
+        /*
+         * Look ahead into the route. Close to a corner, steer toward a point
+         * between the current and next checkpoint so the player begins turning
+         * before reaching the corner instead of making a robotic 90-degree snap.
+         */
+        PathNode next = getNext(path, 1);
+        PathNode nextNext = getNext(path, 2);
+
+        double currentX = waypoint.x + 0.5D;
+        double currentZ = waypoint.z + 0.5D;
+        double steerX = currentX;
+        double steerZ = currentZ;
+        boolean anticipatingTurn = false;
+
+        double currentDx = currentX - self.posX;
+        double currentDz = currentZ - self.posZ;
+        double currentDist = Math.sqrt(currentDx * currentDx + currentDz * currentDz);
+
+        if (next != null && currentDist < 3.2D && sameHeight(waypoint, next)) {
+            int inX = Integer.signum(next.x - waypoint.x);
+            int inZ = Integer.signum(next.z - waypoint.z);
+            int fromX = previousDirectionX(path, waypoint);
+            int fromZ = previousDirectionZ(path, waypoint);
+            int dot = fromX * inX + fromZ * inZ;
+
+            if (fromX != 0 || fromZ != 0) {
+                anticipatingTurn = dot < 2;
+            }
+
+            // Blend farther into the route only when doing so remains a natural
+            // continuation. Sharp turns still retain the corner as the steering
+            // anchor, but the blend starts before the player reaches it.
+            double lookaheadWeight = anticipatingTurn ? 0.38D : 0.62D;
+            if (currentDist < 1.7D) lookaheadWeight *= 0.72D;
+            steerX = currentX * (1.0D - lookaheadWeight) + (next.x + 0.5D) * lookaheadWeight;
+            steerZ = currentZ * (1.0D - lookaheadWeight) + (next.z + 0.5D) * lookaheadWeight;
+
+            // On long straight runs, use one extra checkpoint to avoid tiny
+            // heading changes caused by individual grid nodes.
+            if (!anticipatingTurn && nextNext != null
+                    && sameHeight(waypoint, next) && sameHeight(next, nextNext)) {
+                steerX = steerX * 0.45D + (nextNext.x + 0.5D) * 0.55D;
+                steerZ = steerZ * 0.45D + (nextNext.z + 0.5D) * 0.55D;
+            }
+        }
+
+        double dx = steerX - self.posX;
+        double dz = steerZ - self.posZ;
         double dy = waypoint.y - self.posY;
         double horizontalDist = Math.sqrt(dx * dx + dz * dz);
         if (horizontalDist < 0.08D && Math.abs(dy) < 0.9D) {
@@ -76,16 +139,84 @@ public class CombatSteering {
         double localForward = dx * (-Math.sin(yaw)) + dz * Math.cos(yaw);
         double localStrafe = dx * Math.cos(yaw) + dz * Math.sin(yaw);
 
-        boolean wantForward = localForward > 0.05D;
-        boolean wantBackward = localForward < -0.55D;
-        float strafeAmount = (float) MathHelper.clamp_double(localStrafe * 1.55D, -1.0D, 1.0D);
-        if (Math.abs(localForward) > 0.70D) strafeAmount *= 0.20F;
+        boolean wantForward = localForward > 0.04D;
+        boolean wantBackward = localForward < -0.70D;
 
-        boolean sprint = self.onGround && wantForward;
+        float desiredStrafe = (float) MathHelper.clamp_double(localStrafe * 1.35D, -1.0D, 1.0D);
+        if (Math.abs(localForward) > 0.78D) desiredStrafe *= 0.35F;
+
+        float strafeAmount = applyStrafeHysteresis(desiredStrafe);
+
+        // Human-like corner behavior without randomness: ease off sprint briefly
+        // for a real turn, then resume immediately on the straight.
+        boolean sharpTurn = isSharpTurn(path);
+        boolean sprint = self.onGround && wantForward && !(sharpTurn && horizontalDist < 1.35D);
+
         boolean jump = dy > 0.30D || needsJumpForObstacle(self, dx, dz);
 
-        String reason = buildReason(wantForward, wantBackward, strafeAmount, sprint, jump, horizontalDist);
+        String reason = buildReason(wantForward, wantBackward, strafeAmount, sprint,
+                jump, horizontalDist, anticipatingTurn, sharpTurn);
         return new Result(wantForward, wantBackward, strafeAmount, sprint, jump, reason);
+    }
+
+    private PathNode getNext(Path path, int offset) {
+        int index = path.getIndex() + offset;
+        if (index < 0 || index >= path.getNodes().size()) return null;
+        return path.getNodes().get(index);
+    }
+
+    private boolean sameHeight(PathNode a, PathNode b) {
+        return a != null && b != null && a.y == b.y;
+    }
+
+    private int previousDirectionX(Path path, PathNode current) {
+        int index = path.getIndex();
+        if (index <= 0) return 0;
+        PathNode previous = path.getNodes().get(index - 1);
+        return Integer.signum(current.x - previous.x);
+    }
+
+    private int previousDirectionZ(Path path, PathNode current) {
+        int index = path.getIndex();
+        if (index <= 0) return 0;
+        PathNode previous = path.getNodes().get(index - 1);
+        return Integer.signum(current.z - previous.z);
+    }
+
+    private boolean isSharpTurn(Path path) {
+        PathNode current = path.current();
+        PathNode next = getNext(path, 1);
+        PathNode nextNext = getNext(path, 2);
+        if (current == null || next == null || nextNext == null) return false;
+        if (current.y != next.y || next.y != nextNext.y) return true;
+
+        int ax = Integer.signum(next.x - current.x);
+        int az = Integer.signum(next.z - current.z);
+        int bx = Integer.signum(nextNext.x - next.x);
+        int bz = Integer.signum(nextNext.z - next.z);
+        return ax != bx || az != bz;
+    }
+
+    private float applyStrafeHysteresis(float desired) {
+        int desiredDirection = desired > 0.20F ? 1 : (desired < -0.20F ? -1 : 0);
+
+        if (strafeHoldTicks > 0) strafeHoldTicks--;
+
+        if (desiredDirection == 0) {
+            if (strafeHoldTicks == 0) lastStrafeDirection = 0;
+        } else if (lastStrafeDirection == 0) {
+            lastStrafeDirection = desiredDirection;
+            strafeHoldTicks = 2;
+        } else if (desiredDirection != lastStrafeDirection) {
+            // Require a meaningful opposite request before swapping sides.
+            if (Math.abs(desired) >= 0.48F || strafeHoldTicks == 0) {
+                lastStrafeDirection = desiredDirection;
+                strafeHoldTicks = 2;
+            }
+        }
+
+        if (lastStrafeDirection == 0) return 0.0F;
+        return lastStrafeDirection * Math.min(1.0F, Math.max(0.22F, Math.abs(desired)));
     }
 
     private boolean hasStraightLookahead(Path path) {
@@ -156,14 +287,23 @@ public class CombatSteering {
         return block.isOpaqueCube() || block.isFullBlock() || material.blocksMovement();
     }
 
-    private String buildReason(boolean forward, boolean backward, float strafe, boolean sprint, boolean jump, double dist) {
+    private String buildReason(boolean forward, boolean backward, float strafe,
+                               boolean sprint, boolean jump, double dist,
+                               boolean anticipatingTurn, boolean sharpTurn) {
         StringBuilder sb = new StringBuilder();
         if (forward) sb.append("FWD");
         if (backward) sb.append("BWD");
         if (Math.abs(strafe) > 0.2F) sb.append(strafe > 0 ? "STR-R" : "STR-L");
         if (sprint) sb.append("+SPRINT");
         if (jump) sb.append("+JUMP");
+        if (anticipatingTurn) sb.append("+LOOKAHEAD");
+        if (sharpTurn) sb.append("+CORNER");
         sb.append(" d=").append(String.format("%.1f", dist));
         return sb.toString();
+    }
+
+    private void resetInputState() {
+        lastStrafeDirection = 0;
+        strafeHoldTicks = 0;
     }
 }
