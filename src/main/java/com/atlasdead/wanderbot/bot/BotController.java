@@ -26,6 +26,7 @@ import net.minecraft.entity.player.EntityPlayer;
 public class BotController {
     private static final double KILLAURA_RANGE = 3.5D;
     private static final double DEATH_Y_RISE_THRESHOLD = 8.0D;
+    private static final int DEATH_Y_WINDOW_TICKS = 8;
 
     private final Minecraft mc;
     private final RotationController rotation = new RotationController();
@@ -44,6 +45,8 @@ public class BotController {
     private int killAuraChatCooldown;
     private long lastDeathRestartMs;
     private double previousPlayerY;
+    private double deathYWindowBase;
+    private int deathYWindowTicks;
     private boolean previousPlayerYInitialized;
 
     public BotController(Minecraft mc) {
@@ -74,8 +77,7 @@ public class BotController {
         killAuraActive = false;
         killAuraChatCooldown = 0;
         lastDeathRestartMs = 0L;
-        previousPlayerY = mc.thePlayer.posY;
-        previousPlayerYInitialized = true;
+        resetDeathYTracking(mc.thePlayer.posY);
         movement.release();
         movement.releaseJump();
         movement.attack(false);
@@ -90,6 +92,7 @@ public class BotController {
         movement.releaseJump();
         movement.attack(false);
         previousPlayerYInitialized = false;
+        deathYWindowTicks = 0;
         ensureKillAuraOff();
     }
 
@@ -110,27 +113,49 @@ public class BotController {
 
     /**
      * Fallback death detector for cases where the server death chat is not
-     * delivered through ClientChatReceivedEvent. A sudden upward Y jump of
-     * roughly ten blocks is treated as a respawn/death transition.
+     * delivered through ClientChatReceivedEvent. A large upward Y transition
+     * over a short window is treated as a respawn/death transition. The window
+     * avoids missing deaths whose teleport is delivered across multiple ticks.
      */
     private boolean detectDeathByYJump(EntityPlayerSP player) {
         double currentY = player.posY;
         if (!previousPlayerYInitialized) {
-            previousPlayerY = currentY;
-            previousPlayerYInitialized = true;
+            resetDeathYTracking(currentY);
             return false;
         }
 
+        deathYWindowTicks++;
         double deltaY = currentY - previousPlayerY;
         previousPlayerY = currentY;
 
-        if (deltaY < DEATH_Y_RISE_THRESHOLD) return false;
+        // Start/restart the short observation window on a fresh upward movement.
+        if (deltaY > 0.25D) {
+            if (deathYWindowTicks > DEATH_Y_WINDOW_TICKS) {
+                deathYWindowBase = currentY - deltaY;
+                deathYWindowTicks = 1;
+            }
+        } else if (deathYWindowTicks > DEATH_Y_WINDOW_TICKS) {
+            deathYWindowBase = currentY;
+            deathYWindowTicks = 1;
+        }
+
+        // Ignore tiny changes. Death detection is based on a substantial upward
+        // teleport, not ordinary walking/jumping.
+        double windowRise = currentY - deathYWindowBase;
+        if (windowRise < DEATH_Y_RISE_THRESHOLD) return false;
         if (currentY < 1.0D) return false;
 
         long now = System.currentTimeMillis();
         if (now - lastDeathRestartMs < 1000L) return false;
         lastDeathRestartMs = now;
         return true;
+    }
+
+    private void resetDeathYTracking(double y) {
+        previousPlayerY = y;
+        deathYWindowBase = y;
+        deathYWindowTicks = 0;
+        previousPlayerYInitialized = true;
     }
 
     private void restartAfterDeath() {
@@ -152,8 +177,7 @@ public class BotController {
         pit.start();
         state = BotState.PLANNING;
 
-        previousPlayerY = mc.thePlayer != null ? mc.thePlayer.posY : 0.0D;
-        previousPlayerYInitialized = mc.thePlayer != null;
+        resetDeathYTracking(mc.thePlayer != null ? mc.thePlayer.posY : 0.0D);
     }
 
     public void tick() {
@@ -166,7 +190,9 @@ public class BotController {
 
         // Death fallback must run before startup/combat processing so a respawn
         // detected from position movement immediately resets the whole lifecycle.
-        if (detectDeathByYJump(player)) {
+        // During the startup travel itself, ignore the detector to avoid treating
+        // a legitimate staircase/drop transition as a death reset.
+        if (startupSequence.isComplete() && detectDeathByYJump(player)) {
             restartAfterDeath();
             return;
         }
@@ -203,8 +229,7 @@ public class BotController {
             pit.resetForWorldChange();
             startupSequence.reset();
             state = BotState.PLANNING;
-            previousPlayerY = player.posY;
-            previousPlayerYInitialized = true;
+            resetDeathYTracking(player.posY);
             return;
         }
 
@@ -281,6 +306,7 @@ public class BotController {
         runtimeGuard.reset();
         state = BotState.OFF;
         previousPlayerYInitialized = false;
+        deathYWindowTicks = 0;
         ensureKillAuraOff();
     }
 
