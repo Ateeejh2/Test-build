@@ -20,10 +20,9 @@ import java.util.Set;
 /**
  * Combat-specific A* pathfinder for chasing moving targets.
  *
- * The current path is preserved when a transient replan fails. Pit has no fall
- * damage, so downward transitions are allowed at any depth provided the
- * player can descend through a clear column and a real floor exists below.
- * The only forbidden downward transition is one that continues into the void.
+ * The active route is retained across replans. Search work is deliberately
+ * bounded and terrain queries are cached per search so pathfinding does not
+ * monopolize the Minecraft client thread during frequent combat updates.
  */
 public class CombatPathFinder {
     private static final int[][] DIRS = {
@@ -34,10 +33,10 @@ public class CombatPathFinder {
     private static final double SQRT2 = 1.4142135623730951D;
     private static final int MAX_STEP_UP = 1;
     private static final double ATTACK_RANGE = 3.2D;
-    private static final double REPLAN_THRESHOLD = 4.5D;
-    private static final int REPLAN_TICKS = 30;
-    private static final int SEARCH_RADIUS = 80;
-    private static final int GOAL_STAND_RADIUS = 6;
+    private static final double REPLAN_THRESHOLD = 5.5D;
+    private static final int REPLAN_TICKS = 24;
+    private static final int SEARCH_RADIUS = 64;
+    private static final int GOAL_STAND_RADIUS = 5;
 
     private Path currentPath;
     private BlockPos currentGoal;
@@ -47,6 +46,10 @@ public class CombatPathFinder {
     private double predictedTargetZ;
     private int predictionTicks;
 
+    // Per-search cache. Combat A* calls localOpenSpace frequently, so avoid
+    // resolving the same neighboring positions over and over.
+    private final Map<String, Integer> openSpaceCache = new HashMap<String, Integer>();
+
     public Path getPath(World world, EntityPlayerSP self, EntityPlayer target, int maxNodes) {
         if (world == null || self == null || target == null) return currentPath;
 
@@ -54,15 +57,15 @@ public class CombatPathFinder {
         BlockPos goalPos = computeGoal(self, target);
 
         if (shouldReplan(self, goalPos)) {
-            int effectiveNodes = Math.max(6000, maxNodes);
+            boolean initial = currentPath == null || currentPath.isFinished();
+            int effectiveNodes = adaptiveNodeBudget(self, goalPos, maxNodes, initial);
             Path candidate = findPath(world, self, goalPos, effectiveNodes);
             if (candidate != null && !candidate.isFinished()) {
                 currentPath = candidate;
                 currentGoal = goalPos;
                 tickSinceReplan = 0;
             } else {
-                // Keep the previous usable route rather than stopping on a
-                // transient search failure.
+                // Preserve the last usable path when a bounded search fails.
                 tickSinceReplan++;
             }
         } else {
@@ -72,17 +75,29 @@ public class CombatPathFinder {
         return currentPath;
     }
 
-    /**
-     * Lightweight reachability probe used during target selection. It does not
-     * replace the active combat path and returns only whether A* can currently
-     * produce a route from the player to a standable point near the target.
-     */
+    /** Lightweight reachability probe for callers that need target validation. */
     public boolean canReachTarget(World world, EntityPlayerSP self, EntityPlayer target, int maxNodes) {
         if (world == null || self == null || target == null) return false;
         predictTarget(target);
         BlockPos goalPos = computeGoal(self, target);
-        Path path = findPath(world, self, goalPos, Math.max(1500, maxNodes));
+        int budget = Math.min(3500, Math.max(1200, maxNodes));
+        Path path = findPath(world, self, goalPos, budget);
         return path != null && !path.isFinished();
+    }
+
+    private int adaptiveNodeBudget(EntityPlayerSP self, BlockPos goal, int requested, boolean initial) {
+        double dx = goal.getX() - self.posX;
+        double dz = goal.getZ() - self.posZ;
+        double distance = Math.sqrt(dx * dx + dz * dz);
+        int requestedSafe = Math.max(1200, requested);
+
+        // Combat paths are normally local. Keep the first search a little more
+        // generous, but prevent a routine replan from doing a 10k-node search.
+        int budget;
+        if (distance <= 10.0D) budget = initial ? 4200 : 2600;
+        else if (distance <= 24.0D) budget = initial ? 5200 : 3400;
+        else budget = initial ? 6500 : 4200;
+        return Math.min(requestedSafe, budget);
     }
 
     private void predictTarget(EntityPlayer target) {
@@ -117,12 +132,15 @@ public class CombatPathFinder {
     private boolean shouldReplan(EntityPlayerSP self, BlockPos newGoal) {
         if (currentPath == null || currentPath.isFinished()) return true;
         if (currentGoal == null) return true;
+
         double goalDist = horizontalDistance(currentGoal, newGoal);
         if (goalDist > REPLAN_THRESHOLD) return true;
         return tickSinceReplan >= REPLAN_TICKS;
     }
 
     private Path findPath(World world, EntityPlayerSP self, BlockPos goal, int maxNodes) {
+        openSpaceCache.clear();
+
         BlockPos start = new BlockPos(self.posX, self.posY, self.posZ);
         BlockPos s = findStandNear(world, start, 2);
         BlockPos g = findStandNear(world, goal, GOAL_STAND_RADIUS);
@@ -131,7 +149,7 @@ public class CombatPathFinder {
         final Map<String, PathNode> nodes = new HashMap<String, PathNode>();
         final Map<String, Double> best = new HashMap<String, Double>();
         final Set<String> closed = new HashSet<String>();
-        final PriorityQueue<PathNode> open = new PriorityQueue<PathNode>(512,
+        final PriorityQueue<PathNode> open = new PriorityQueue<PathNode>(256,
                 new Comparator<PathNode>() {
                     @Override
                     public int compare(PathNode a, PathNode b) {
@@ -154,7 +172,7 @@ public class CombatPathFinder {
             Double known = best.get(current.key());
             if (known != null && current.gCost > known + 0.000001D) continue;
             if (!closed.add(current.key())) continue;
-            if (same(current, g)) return buildPath(current);
+            if (same(current, g)) return simplifyPath(buildPath(current));
 
             BlockPos cp = new BlockPos(current.x, current.y, current.z);
             int prevDx = current.parent == null ? 0 : Integer.signum(current.x - current.parent.x);
@@ -170,13 +188,14 @@ public class CombatPathFinder {
 
                 if (Math.abs(next.getX() - s.getX()) > SEARCH_RADIUS
                         || Math.abs(next.getZ() - s.getZ()) > SEARCH_RADIUS
-                        || Math.abs(next.getY() - s.getY()) > world.getHeight()) {
+                        || Math.abs(next.getY() - s.getY()) > 12) {
                     continue;
                 }
 
                 String k = key(next);
                 if (closed.contains(k)) continue;
-                int openDirs = localOpenSpace(world, next);
+
+                int openDirs = cachedLocalOpenSpace(world, next);
                 double edge = edgeCost(world, cp, next, prevDx, prevDz, g, openDirs);
                 double candidate = current.gCost + edge;
                 Double old = best.get(k);
@@ -208,15 +227,11 @@ public class CombatPathFinder {
             return up;
         }
 
-        // Pit has no fall damage. Descend until the first usable floor is found.
-        // A drop is valid regardless of depth, but a column with no floor is the
-        // void and must never become a combat waypoint.
         for (int y = from.getY() - 1; y > 1; y--) {
             BlockPos candidate = new BlockPos(x, y, z);
             if (!clearAt(world, candidate) || !clearAt(world, candidate.up())) break;
             if (isSolidFloor(world, candidate.down())) return candidate;
         }
-
         return null;
     }
 
@@ -231,7 +246,7 @@ public class CombatPathFinder {
                 && canOccupy(world, from.add(0, 0, dz));
     }
 
-    private static BlockPos findStandNear(World world, BlockPos p, int radius) {
+    private BlockPos findStandNear(World world, BlockPos p, int radius) {
         if (canOccupy(world, p)) return p;
         BlockPos best = null;
         double bestScore = Double.POSITIVE_INFINITY;
@@ -240,10 +255,10 @@ public class CombatPathFinder {
                 for (int dy = -3; dy <= 3; dy++) {
                     BlockPos c = p.add(dx, dy, dz);
                     if (!canOccupy(world, c)) continue;
-                    int open = localOpenSpace(world, c);
+                    int open = cachedLocalOpenSpace(world, c);
                     double score = dx * dx + dz * dz + Math.abs(dy) * 2.0D;
-                    if (open <= 1) score += 12.0D;
-                    else if (open == 2) score += 4.0D;
+                    if (open <= 1) score += 4.0D;
+                    else if (open == 2) score += 1.2D;
                     if (score < bestScore) {
                         bestScore = score;
                         best = c;
@@ -252,6 +267,18 @@ public class CombatPathFinder {
             }
         }
         return best;
+    }
+
+    private int cachedLocalOpenSpace(World world, BlockPos p) {
+        String k = key(p);
+        Integer cached = openSpaceCache.get(k);
+        if (cached != null) return cached;
+        int count = 0;
+        for (int[] d : DIRS) {
+            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
+        }
+        openSpaceCache.put(k, count);
+        return count;
     }
 
     private static double edgeCost(World world, BlockPos from, BlockPos to,
@@ -267,18 +294,18 @@ public class CombatPathFinder {
         if (prevDx != 0 || prevDz != 0) {
             int dot = prevDx * dx + prevDz * dz;
             if (dot < 0) cost += 7.0D;
-            else if (dot == 0) cost += 0.45D;
-            else if (prevDx != dx || prevDz != dz) cost += 0.10D;
+            else if (dot == 0) cost += 0.35D;
+            else if (prevDx != dx || prevDz != dz) cost += 0.07D;
         }
 
-        if (openDirs <= 1) cost += 8.0D;
-        else if (openDirs == 2) cost += 2.5D;
-        else if (openDirs == 3) cost += 0.6D;
-        else if (openDirs >= 7) cost -= 0.05D;
+        if (openDirs <= 1) cost += 2.5D;
+        else if (openDirs == 2) cost += 0.8D;
+        else if (openDirs == 3) cost += 0.18D;
+        else if (openDirs >= 7) cost -= 0.03D;
 
         double before = horizontalDistance(from, goal);
         double after = horizontalDistance(to, goal);
-        if (after > before + 1.25D) cost += 0.45D;
+        if (after > before + 1.5D) cost += 0.35D;
 
         return Math.max(0.05D, cost);
     }
@@ -296,18 +323,6 @@ public class CombatPathFinder {
         double dx = a.getX() - b.getX();
         double dz = a.getZ() - b.getZ();
         return Math.sqrt(dx * dx + dz * dz);
-    }
-
-    private static int localOpenSpace(World world, BlockPos p) {
-        int count = 0;
-        for (int[] d : DIRS) {
-            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
-        }
-        return count;
-    }
-
-    private static boolean isClearColumn(World world, BlockPos pos) {
-        return clearAt(world, pos) && clearAt(world, pos.up());
     }
 
     private static boolean clearAt(World world, BlockPos pos) {
@@ -355,6 +370,34 @@ public class CombatPathFinder {
         return new Path(result);
     }
 
+    /** Remove redundant collinear checkpoints while preserving every turn and height change. */
+    private static Path simplifyPath(Path original) {
+        List<PathNode> source = original.getNodes();
+        if (source.size() < 3) return original;
+
+        List<PathNode> result = new ArrayList<PathNode>();
+        result.add(source.get(0));
+
+        for (int i = 1; i < source.size() - 1; i++) {
+            PathNode prev = result.get(result.size() - 1);
+            PathNode cur = source.get(i);
+            PathNode next = source.get(i + 1);
+
+            int dx1 = Integer.signum(cur.x - prev.x);
+            int dz1 = Integer.signum(cur.z - prev.z);
+            int dy1 = Integer.signum(cur.y - prev.y);
+            int dx2 = Integer.signum(next.x - cur.x);
+            int dz2 = Integer.signum(next.z - cur.z);
+            int dy2 = Integer.signum(next.y - cur.y);
+
+            boolean sameDirection = dx1 == dx2 && dz1 == dz2 && dy1 == dy2;
+            if (!sameDirection) result.add(cur);
+        }
+
+        result.add(source.get(source.size() - 1));
+        return result.size() == source.size() ? original : new Path(result);
+    }
+
     public Path getCurrentPath() { return currentPath; }
     public BlockPos getCurrentGoal() { return currentGoal; }
     public double getPredictedTargetX() { return predictedTargetX; }
@@ -365,5 +408,6 @@ public class CombatPathFinder {
         currentGoal = null;
         tickSinceReplan = 0;
         predictionTicks = 0;
+        openSpaceCache.clear();
     }
 }
