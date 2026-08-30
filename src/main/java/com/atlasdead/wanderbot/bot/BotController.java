@@ -48,6 +48,7 @@ public class BotController {
     private double deathYWindowBase;
     private int deathYWindowTicks;
     private boolean previousPlayerYInitialized;
+    private String enemyRegisteredTargetName;
 
     public BotController(Minecraft mc) {
         this.mc = mc;
@@ -77,6 +78,7 @@ public class BotController {
         killAuraActive = false;
         killAuraChatCooldown = 0;
         lastDeathRestartMs = 0L;
+        enemyRegisteredTargetName = null;
         resetDeathYTracking(mc.thePlayer.posY);
         movement.release();
         movement.releaseJump();
@@ -93,30 +95,20 @@ public class BotController {
         movement.attack(false);
         previousPlayerYInitialized = false;
         deathYWindowTicks = 0;
+        clearEnemyTarget();
         ensureKillAuraOff();
     }
 
-    /**
-     * Called by the chat listener when the server reports a death.
-     * The complete bot lifecycle is restarted from the same startup sequence
-     * used after a manual bot start.
-     */
     public void handleDeathMessage() {
         if (state == BotState.OFF || mc.theWorld == null || mc.thePlayer == null) return;
 
         long now = System.currentTimeMillis();
         if (now - lastDeathRestartMs < 1000L) return;
-        lastDeathRestartMs = now;
 
+        lastDeathRestartMs = now;
         restartAfterDeath();
     }
 
-    /**
-     * Fallback death detector for cases where the server death chat is not
-     * delivered through ClientChatReceivedEvent. A large upward Y transition
-     * over a short window is treated as a respawn/death transition. The window
-     * avoids missing deaths whose teleport is delivered across multiple ticks.
-     */
     private boolean detectDeathByYJump(EntityPlayerSP player) {
         double currentY = player.posY;
         if (!previousPlayerYInitialized) {
@@ -128,7 +120,6 @@ public class BotController {
         double deltaY = currentY - previousPlayerY;
         previousPlayerY = currentY;
 
-        // Start/restart the short observation window on a fresh upward movement.
         if (deltaY > 0.25D) {
             if (deathYWindowTicks > DEATH_Y_WINDOW_TICKS) {
                 deathYWindowBase = currentY - deltaY;
@@ -139,8 +130,6 @@ public class BotController {
             deathYWindowTicks = 1;
         }
 
-        // Ignore tiny changes. Death detection is based on a substantial upward
-        // teleport, not ordinary walking/jumping.
         double windowRise = currentY - deathYWindowBase;
         if (windowRise < DEATH_Y_RISE_THRESHOLD) return false;
         if (currentY < 1.0D) return false;
@@ -159,8 +148,7 @@ public class BotController {
     }
 
     private void restartAfterDeath() {
-        // Always issue the requested KillAura OFF command on death, even if the
-        // local state already says it is off.
+        clearEnemyTarget();
         sendKillAuraCommand(false);
         killAuraActive = false;
         killAuraChatCooldown = 10;
@@ -188,20 +176,14 @@ public class BotController {
             return;
         }
 
-        // Death fallback must run before startup/combat processing so a respawn
-        // detected from position movement immediately resets the whole lifecycle.
-        // During the startup travel itself, ignore the detector to avoid treating
-        // a legitimate staircase/drop transition as a death reset.
         if (startupSequence.isComplete() && detectDeathByYJump(player)) {
             restartAfterDeath();
             return;
         }
 
-        /* Startup sequence is the only place where the legacy static PathFinder is used. */
         if (!startupSequence.isComplete()) {
             startupSequence.tick(player);
             state = BotState.WALKING;
-            // PitStartupSequence owns movement for this tick. Do not clear its inputs.
             return;
         }
 
@@ -210,12 +192,14 @@ public class BotController {
             movement.release();
             movement.releaseJump();
             movement.attack(false);
+            clearEnemyTarget();
             return;
         }
         if (guardStatus == PitRuntimeGuard.Status.PLAYER_DEAD) {
             movement.release();
             movement.releaseJump();
             movement.attack(false);
+            clearEnemyTarget();
             ensureKillAuraOff();
             pit.handleRuntimeDeath();
             state = BotState.RECOVERING;
@@ -225,6 +209,7 @@ public class BotController {
             movement.release();
             movement.releaseJump();
             movement.attack(false);
+            clearEnemyTarget();
             ensureKillAuraOff();
             pit.resetForWorldChange();
             startupSequence.reset();
@@ -249,6 +234,7 @@ public class BotController {
                 || rules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.EVENT
                 || rules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.WAITING
                 || rules.phase == com.atlasdead.wanderbot.pit.PitRulesEngine.MatchPhase.WARMUP)) {
+            clearEnemyTarget();
             ensureKillAuraOff();
             movement.release();
             state = pitMode == PitMode.PAUSED ? BotState.WALKING : BotState.PLANNING;
@@ -256,6 +242,7 @@ public class BotController {
         }
 
         if (pit.getZones().isSelfProtected(player)) {
+            clearEnemyTarget();
             ensureKillAuraOff();
             movement.release();
             state = BotState.WALKING;
@@ -270,6 +257,7 @@ public class BotController {
                 null);
 
         if (target == null || !pit.getTargets().isViable(player, WanderBotSettings.targetScanRange)) {
+            clearEnemyTarget();
             pit.getTargets().clear();
             ensureKillAuraOff();
             movement.release();
@@ -278,6 +266,7 @@ public class BotController {
         }
 
         if (pit.getZones().isPlayerProtected(target)) {
+            clearEnemyTarget();
             pit.getTargets().clear();
             ensureKillAuraOff();
             movement.release();
@@ -298,6 +287,7 @@ public class BotController {
 
     public void onDisconnect() {
         if (state == BotState.OFF) return;
+        clearEnemyTarget();
         pit.stop();
         combatExecutor.reset();
         movement.release();
@@ -317,24 +307,53 @@ public class BotController {
         }
 
         if (target == null || target.isDead || target.getHealth() <= 0.0F) {
+            clearEnemyTarget();
             ensureKillAuraOff();
             return;
         }
 
         double distance = player.getDistanceToEntity(target);
-        if (distance <= KILLAURA_RANGE && !killAuraActive) {
-            sendKillAuraCommand(true);
-            killAuraActive = true;
-            combatExecutor.setKillAuraActive(true);
-            combatPhaseController.setKillAuraActive(true);
-            killAuraChatCooldown = 10;
-        } else if (distance > KILLAURA_RANGE && killAuraActive) {
-            sendKillAuraCommand(false);
-            killAuraActive = false;
-            combatExecutor.setKillAuraActive(false);
-            combatPhaseController.setKillAuraActive(false);
-            killAuraChatCooldown = 10;
+        if (distance <= KILLAURA_RANGE) {
+            syncEnemyTarget(target.getName());
+            if (!killAuraActive) {
+                sendKillAuraCommand(true);
+                killAuraActive = true;
+                combatExecutor.setKillAuraActive(true);
+                combatPhaseController.setKillAuraActive(true);
+                killAuraChatCooldown = 10;
+            }
+        } else {
+            clearEnemyTarget();
+            if (killAuraActive) {
+                sendKillAuraCommand(false);
+                killAuraActive = false;
+                combatExecutor.setKillAuraActive(false);
+                combatPhaseController.setKillAuraActive(false);
+                killAuraChatCooldown = 10;
+            }
         }
+    }
+
+    private void syncEnemyTarget(String targetName) {
+        if (targetName == null || targetName.trim().isEmpty()) return;
+        if (targetName.equals(enemyRegisteredTargetName)) return;
+
+        if (enemyRegisteredTargetName != null) {
+            sendEnemyCommand(false, enemyRegisteredTargetName);
+        }
+        sendEnemyCommand(true, targetName);
+        enemyRegisteredTargetName = targetName;
+    }
+
+    private void clearEnemyTarget() {
+        if (enemyRegisteredTargetName == null) return;
+        sendEnemyCommand(false, enemyRegisteredTargetName);
+        enemyRegisteredTargetName = null;
+    }
+
+    private void sendEnemyCommand(boolean add, String targetName) {
+        if (mc.thePlayer == null || targetName == null || targetName.trim().isEmpty()) return;
+        mc.thePlayer.sendChatMessage((add ? ".enemy add " : ".enemy remove ") + targetName);
     }
 
     private void sendKillAuraCommand(boolean on) {
@@ -351,7 +370,6 @@ public class BotController {
         killAuraChatCooldown = 10;
     }
 
-    /** Synchronize rotation ownership with an externally observed KillAura state. */
     public void applyKillAuraStateFromMessage(boolean active) {
         killAuraActive = active;
         combatExecutor.setKillAuraActive(active);
@@ -361,7 +379,6 @@ public class BotController {
     public CombatExecutionController getCombatExecutor() { return combatExecutor; }
     public boolean isKillAuraActive() { return killAuraActive; }
 
-    /** Render the startup path while startup is active, otherwise render the combat path. */
     public Path getPath() {
         if (!startupSequence.isComplete()) {
             Path startupPath = startupSequence.getPath();
@@ -377,12 +394,10 @@ public class BotController {
     public String getRuntimeGuardStatus() { return runtimeGuard.getStatus().name(); }
     public double getTargetScore() { return pit.getTargets().getTargetScore(); }
     public com.atlasdead.wanderbot.pit.TargetTracker.ArmorProfile getTargetArmor() { return pit.getTargets().getTargetArmor(); }
-
     public String getTargetName() {
         EntityPlayer target = pit.getTargets().getTarget();
         return target == null ? null : target.getName();
     }
-
     public int getLocalStreak() { return pit.getStreak().getEffectiveStreak(); }
     public com.atlasdead.wanderbot.pit.StreakManager.Tier getStreakTier() { return pit.getStreak().getTier(); }
     public int getPeakStreak() { return pit.getStreak().getPeakStreak(); }
