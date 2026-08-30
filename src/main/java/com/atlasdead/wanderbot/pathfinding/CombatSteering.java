@@ -9,8 +9,8 @@ import net.minecraft.world.World;
 
 /**
  * Converts the authoritative CombatPath into movement inputs.
- * Movement, jump decisions, and waypoint progression are all based on the
- * active rendered waypoint so the visual path and actual steering agree.
+ * Movement, jump decisions, and waypoint progression are based on the same
+ * active path so the rendered route and actual steering stay synchronized.
  */
 public class CombatSteering {
     public static final class Result {
@@ -38,6 +38,9 @@ public class CombatSteering {
     public Result compute(EntityPlayerSP self, Path path, double targetDistance) {
         if (self == null || path == null || path.isFinished()) return Result.idle();
 
+        // Consume checkpoints as they are reached. A small amount of lookahead
+        // is allowed only when the next checkpoint continues in nearly the same
+        // direction; turn checkpoints and height transitions remain intact.
         while (!path.isFinished()) {
             PathNode current = path.current();
             if (current == null) break;
@@ -48,6 +51,8 @@ public class CombatSteering {
             double vertical = Math.abs(self.posY - current.y);
 
             if (horizontal <= 0.72D && vertical <= 1.30D) {
+                path.advance();
+            } else if (horizontal <= 1.05D && vertical <= 1.30D && hasStraightLookahead(path)) {
                 path.advance();
             } else {
                 break;
@@ -76,15 +81,31 @@ public class CombatSteering {
         float strafeAmount = (float) MathHelper.clamp_double(localStrafe * 1.55D, -1.0D, 1.0D);
         if (Math.abs(localForward) > 0.70D) strafeAmount *= 0.20F;
 
-        // CombatPath is sprint-first; only airborne state suppresses the key.
         boolean sprint = self.onGround && wantForward;
-
-        // Jump both for explicit vertical path steps and for a one-block obstacle
-        // directly ahead where the destination above it is clear.
         boolean jump = dy > 0.30D || needsJumpForObstacle(self, dx, dz);
 
         String reason = buildReason(wantForward, wantBackward, strafeAmount, sprint, jump, horizontalDist);
         return new Result(wantForward, wantBackward, strafeAmount, sprint, jump, reason);
+    }
+
+    private boolean hasStraightLookahead(Path path) {
+        int index = path.getIndex();
+        if (index + 2 >= path.getNodes().size()) return false;
+
+        PathNode a = path.getNodes().get(index);
+        PathNode b = path.getNodes().get(index + 1);
+        PathNode c = path.getNodes().get(index + 2);
+
+        int abx = Integer.signum(b.x - a.x);
+        int abz = Integer.signum(b.z - a.z);
+        int bcx = Integer.signum(c.x - b.x);
+        int bcz = Integer.signum(c.z - b.z);
+        int aby = Integer.signum(b.y - a.y);
+        int bcy = Integer.signum(c.y - b.y);
+
+        if (aby != bcy) return false;
+        if (abx == bcx && abz == bcz) return true;
+        return abx * bcx + abz * bcz >= 1;
     }
 
     private boolean needsJumpForObstacle(EntityPlayerSP self, double dx, double dz) {
@@ -103,8 +124,6 @@ public class CombatSteering {
             BlockPos landingFeet = feet.up();
             BlockPos landingHead = feet.up(2);
 
-            // A one-block-high obstacle: the current feet space is blocked,
-            // the block above it is clear, and the top provides support.
             if (!isClear(self.worldObj, feet)
                     && isClear(self.worldObj, landingFeet)
                     && isClear(self.worldObj, landingHead)
@@ -112,8 +131,6 @@ public class CombatSteering {
                 return true;
             }
 
-            // Also handle a blocked head corridor when the next higher column
-            // is open, which can occur at the edge of compact structures.
             if (!isClear(self.worldObj, head)
                     && isClear(self.worldObj, landingHead)) {
                 return true;
