@@ -21,13 +21,6 @@ public class RotationController {
     private int sprintBurstRemaining;
     private int microPauseRemaining;
 
-    // Path-rotation-only state. The rendered waypoint can move by a small amount
-    // every tick, so keep a stable target heading and ease it toward larger
-    // changes instead of feeding raw waypoint yaw directly into the steering loop.
-    private boolean pathYawInitialized;
-    private float pathTargetYaw;
-    private float pathRequestedYaw;
-
     public float tick(EntityPlayerSP player, double targetX, double targetY, double targetZ, float yawBias) {
         double dx = targetX - player.posX;
         double dy = targetY - (player.posY + player.getEyeHeight());
@@ -95,12 +88,9 @@ public class RotationController {
 
     /**
      * Deterministic smooth rotation used when following a rendered path.
-     *
-     * The waypoint direction is first stabilized into pathTargetYaw. Tiny
-     * direction changes (<= 1.5 degrees) are ignored, while larger changes are
-     * eased into the target. The actual player yaw is then approached with a
-     * bounded acceleration curve. No jitter, random distraction, or overshoot
-     * is used here, keeping rotation aligned with the rendered route.
+     * The target is always derived from the current waypoint so steering and
+     * rendered checkpoints stay synchronized. No persistent secondary target
+     * is used here because that can introduce lag/oscillation near checkpoints.
      */
     public float tickPath(EntityPlayerSP player, double targetX, double targetY, double targetZ) {
         double dx = targetX - player.posX;
@@ -109,68 +99,30 @@ public class RotationController {
         double horizontal = Math.sqrt(dx * dx + dz * dz);
         if (horizontal < 0.001D) return lastYawError;
 
-        float rawTargetYaw = (float)(Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
+        float targetYaw = (float)(Math.atan2(dz, dx) * 180.0D / Math.PI) - 90.0F;
         float targetPitch = (float)(-(Math.atan2(dy, horizontal) * 180.0D / Math.PI));
-
-        if (!pathYawInitialized) {
-            pathYawInitialized = true;
-            pathTargetYaw = rawTargetYaw;
-            pathRequestedYaw = rawTargetYaw;
-        } else {
-            float requestDelta = MathHelper.wrapAngleTo180_float(rawTargetYaw - pathRequestedYaw);
-            pathRequestedYaw = rawTargetYaw;
-
-            // Ignore tiny waypoint-direction noise instead of making the view
-            // chase one-degree changes every tick.
-            if (Math.abs(requestDelta) > 1.5F) {
-                float follow;
-                float magnitude = Math.abs(requestDelta);
-                if (magnitude > 45.0F) follow = 0.55F;
-                else if (magnitude > 20.0F) follow = 0.40F;
-                else follow = 0.28F;
-
-                float targetDelta = MathHelper.wrapAngleTo180_float(rawTargetYaw - pathTargetYaw);
-                pathTargetYaw += targetDelta * follow;
-            }
-        }
-
-        float delta = MathHelper.wrapAngleTo180_float(pathTargetYaw - player.rotationYaw);
+        float delta = MathHelper.wrapAngleTo180_float(targetYaw - player.rotationYaw);
         lastYawError = Math.abs(delta);
 
-        // Smooth acceleration by error size. Small errors settle gently instead
-        // of producing visible 1-2 degree left/right corrections.
         float desired;
-        if (lastYawError > 100.0F) desired = 16.0F;
-        else if (lastYawError > 55.0F) desired = 12.0F;
-        else if (lastYawError > 25.0F) desired = 8.0F;
-        else if (lastYawError > 8.0F) desired = 4.5F;
-        else if (lastYawError > 2.0F) desired = 2.0F;
-        else desired = 0.0F;
+        if (lastYawError > 90.0F) desired = 18.0F;
+        else if (lastYawError > 45.0F) desired = 14.0F;
+        else if (lastYawError > 20.0F) desired = 10.0F;
+        else if (lastYawError > 6.0F) desired = 6.0F;
+        else desired = 2.2F;
 
         if (delta < 0.0F) desired = -desired;
-        float acceleration = lastYawError > 35.0F ? 2.6F : 1.8F;
-
-        // Prevent stale velocity from carrying the view across a newly smoothed
-        // target when the desired direction changes.
-        if (desired != 0.0F && yawVelocity != 0.0F
-                && ((desired > 0.0F && yawVelocity < 0.0F)
-                || (desired < 0.0F && yawVelocity > 0.0F))) {
-            yawVelocity = 0.0F;
-        }
+        float acceleration = lastYawError > 35.0F ? 3.5F : 2.4F;
         yawVelocity = approach(yawVelocity, desired, acceleration);
 
-        float step = Math.min(lastYawError, Math.max(0.35F, Math.abs(yawVelocity)));
-        if (lastYawError <= 1.5F) {
-            step = Math.min(step, 0.6F);
-        }
-        if (delta < 0.0F) step = -step;
-        player.rotationYaw += step;
+        float step = Math.min(lastYawError, Math.max(0.75F, Math.abs(yawVelocity)));
+        player.rotationYaw += delta < 0.0F ? -step : step;
         player.rotationYawHead = player.rotationYaw;
         player.renderYawOffset = player.rotationYaw;
 
         float pitchDelta = MathHelper.wrapAngleTo180_float(targetPitch - player.rotationPitch);
-        float desiredPitch = Math.max(-3.5F, Math.min(3.5F, pitchDelta * 0.28F));
-        pitchVelocity = approach(pitchVelocity, desiredPitch, 1.0F);
+        float desiredPitch = Math.max(-4.0F, Math.min(4.0F, pitchDelta * 0.32F));
+        pitchVelocity = approach(pitchVelocity, desiredPitch, 1.2F);
         player.rotationPitch += pitchVelocity;
         player.rotationPitch = Math.max(-89.0F, Math.min(89.0F, player.rotationPitch));
         return lastYawError;
@@ -213,9 +165,6 @@ public class RotationController {
         distractionYaw = 0;
         sprintBurstRemaining = 0;
         microPauseRemaining = 0;
-        pathYawInitialized = false;
-        pathTargetYaw = 0;
-        pathRequestedYaw = 0;
     }
 
     private float approach(float current, float target, float amount) {
