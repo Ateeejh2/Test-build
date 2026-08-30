@@ -61,6 +61,8 @@ public class CombatPathFinder {
                 currentGoal = goalPos;
                 tickSinceReplan = 0;
             } else {
+                // Keep the previous usable route rather than stopping on a
+                // transient search failure.
                 tickSinceReplan++;
             }
         } else {
@@ -68,6 +70,19 @@ public class CombatPathFinder {
         }
 
         return currentPath;
+    }
+
+    /**
+     * Lightweight reachability probe used during target selection. It does not
+     * replace the active combat path and returns only whether A* can currently
+     * produce a route from the player to a standable point near the target.
+     */
+    public boolean canReachTarget(World world, EntityPlayerSP self, EntityPlayer target, int maxNodes) {
+        if (world == null || self == null || target == null) return false;
+        predictTarget(target);
+        BlockPos goalPos = computeGoal(self, target);
+        Path path = findPath(world, self, goalPos, Math.max(1500, maxNodes));
+        return path != null && !path.isFinished();
     }
 
     private void predictTarget(EntityPlayer target) {
