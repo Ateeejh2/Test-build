@@ -20,10 +20,10 @@ import java.util.Set;
 /**
  * Combat-specific A* pathfinder for chasing moving targets.
  *
- * The current path is preserved when a transient replan fails. This prevents
- * the bot from stopping simply because one target-position update produced no
- * usable route. The planner models one-block climbs, controlled drops and
- * diagonal corner clearance.
+ * The current path is preserved when a transient replan fails. Pit has no fall
+ * damage, so downward transitions are allowed at any depth provided the
+ * player can descend through a clear column and a real floor exists below.
+ * The only forbidden downward transition is one that continues into the void.
  */
 public class CombatPathFinder {
     private static final int[][] DIRS = {
@@ -33,7 +33,6 @@ public class CombatPathFinder {
 
     private static final double SQRT2 = 1.4142135623730951D;
     private static final int MAX_STEP_UP = 1;
-    private static final int MAX_DROP = 4;
     private static final double ATTACK_RANGE = 3.2D;
     private static final double REPLAN_THRESHOLD = 4.5D;
     private static final int REPLAN_TICKS = 30;
@@ -62,8 +61,6 @@ public class CombatPathFinder {
                 currentGoal = goalPos;
                 tickSinceReplan = 0;
             } else {
-                // Keep the previous usable route rather than stopping on a
-                // transient search failure.
                 tickSinceReplan++;
             }
         } else {
@@ -105,7 +102,6 @@ public class CombatPathFinder {
     private boolean shouldReplan(EntityPlayerSP self, BlockPos newGoal) {
         if (currentPath == null || currentPath.isFinished()) return true;
         if (currentGoal == null) return true;
-
         double goalDist = horizontalDistance(currentGoal, newGoal);
         if (goalDist > REPLAN_THRESHOLD) return true;
         return tickSinceReplan >= REPLAN_TICKS;
@@ -143,7 +139,6 @@ public class CombatPathFinder {
             Double known = best.get(current.key());
             if (known != null && current.gCost > known + 0.000001D) continue;
             if (!closed.add(current.key())) continue;
-
             if (same(current, g)) return buildPath(current);
 
             BlockPos cp = new BlockPos(current.x, current.y, current.z);
@@ -153,7 +148,6 @@ public class CombatPathFinder {
             for (int[] dir : DIRS) {
                 int dx = dir[0];
                 int dz = dir[1];
-
                 if (dx != 0 && dz != 0 && !cornerClear(world, cp, dx, dz)) continue;
 
                 BlockPos next = findBestDestination(world, cp, dx, dz);
@@ -161,13 +155,12 @@ public class CombatPathFinder {
 
                 if (Math.abs(next.getX() - s.getX()) > SEARCH_RADIUS
                         || Math.abs(next.getZ() - s.getZ()) > SEARCH_RADIUS
-                        || Math.abs(next.getY() - s.getY()) > 12) {
+                        || Math.abs(next.getY() - s.getY()) > world.getHeight()) {
                     continue;
                 }
 
                 String k = key(next);
                 if (closed.contains(k)) continue;
-
                 int openDirs = localOpenSpace(world, next);
                 double edge = edgeCost(world, cp, next, prevDx, prevDz, g, openDirs);
                 double candidate = current.gCost + edge;
@@ -190,46 +183,26 @@ public class CombatPathFinder {
         int x = from.getX() + dx;
         int z = from.getZ() + dz;
         BlockPos same = new BlockPos(x, from.getY(), z);
-        if (canOccupy(world, same) && safeTransition(world, from, same)) return same;
+        if (canOccupy(world, same)) return same;
 
-        // A one-block obstacle can be climbed by jumping onto its top.
         BlockPos up = same.up();
         if (up.getY() - from.getY() <= MAX_STEP_UP
                 && canOccupy(world, up)
-                && safeTransition(world, from, up)) {
+                && clearAt(world, same)
+                && clearAt(world, same.up())) {
             return up;
         }
 
-        // Controlled drops for stairs, ledges and uneven terrain.
-        for (int drop = 1; drop <= MAX_DROP; drop++) {
-            BlockPos down = same.down(drop);
-            if (canOccupy(world, down) && safeTransition(world, from, down)) return down;
+        // Pit has no fall damage. Descend until the first usable floor is found.
+        // A drop is valid regardless of depth, but a column with no floor is the
+        // void and must never become a combat waypoint.
+        for (int y = from.getY() - 1; y > 1; y--) {
+            BlockPos candidate = new BlockPos(x, y, z);
+            if (!clearAt(world, candidate) || !clearAt(world, candidate.up())) break;
+            if (isSolidFloor(world, candidate.down())) return candidate;
         }
 
         return null;
-    }
-
-    private static boolean safeTransition(World world, BlockPos from, BlockPos to) {
-        int dy = to.getY() - from.getY();
-        if (dy > MAX_STEP_UP || dy < -MAX_DROP) return false;
-        if (dy < 0) {
-            int fall = 0;
-            for (int y = from.getY() - 1; y >= to.getY(); y--) {
-                fall++;
-                BlockPos probe = new BlockPos(to.getX(), y, to.getZ());
-                if (isSolidFloor(world, probe)) return fall <= MAX_DROP + 1;
-                if (!isClearColumn(world, probe)) return false;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    private static boolean cornerClear(World world, BlockPos from, int dx, int dz) {
-        // Both side cells must be traversable. This prevents clipping the corner
-        // of two structures during diagonal movement.
-        return canOccupy(world, from.add(dx, 0, 0))
-                && canOccupy(world, from.add(0, 0, dz));
     }
 
     public static boolean canOccupy(World world, BlockPos feet) {
@@ -238,37 +211,13 @@ public class CombatPathFinder {
         return isSolidFloor(world, feet.down());
     }
 
-    private static boolean clearAt(World world, BlockPos pos) {
-        Block block = world.getBlockState(pos).getBlock();
-        Material material = block.getMaterial();
-        if (material == Material.air || block.isAir(world, pos)) return true;
-        if (material.isLiquid()) return false;
-        return !material.blocksMovement();
-    }
-
-    private static boolean isSolidFloor(World world, BlockPos pos) {
-        if (pos.getY() <= 0 || pos.getY() >= world.getHeight()) return false;
-        Block block = world.getBlockState(pos).getBlock();
-        Material material = block.getMaterial();
-        if (material == Material.air || material.isLiquid() || block.isAir(world, pos)) return false;
-        return block.isOpaqueCube() || block.isFullBlock() || material.blocksMovement();
-    }
-
-    private static boolean isClearColumn(World world, BlockPos pos) {
-        return clearAt(world, pos) && clearAt(world, pos.up());
-    }
-
-    private static int localOpenSpace(World world, BlockPos p) {
-        int count = 0;
-        for (int[] d : DIRS) {
-            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
-        }
-        return count;
+    private static boolean cornerClear(World world, BlockPos from, int dx, int dz) {
+        return canOccupy(world, from.add(dx, 0, 0))
+                && canOccupy(world, from.add(0, 0, dz));
     }
 
     private static BlockPos findStandNear(World world, BlockPos p, int radius) {
         if (canOccupy(world, p)) return p;
-
         BlockPos best = null;
         double bestScore = Double.POSITIVE_INFINITY;
         for (int dx = -radius; dx <= radius; dx++) {
@@ -298,7 +247,7 @@ public class CombatPathFinder {
         double cost = (dx != 0 && dz != 0) ? SQRT2 : 1.0D;
 
         if (dy > 0) cost += 0.80D;
-        if (dy < 0) cost += 0.22D;
+        if (dy < 0) cost += 0.05D;
 
         if (prevDx != 0 || prevDz != 0) {
             int dot = prevDx * dx + prevDz * dz;
@@ -332,6 +281,34 @@ public class CombatPathFinder {
         double dx = a.getX() - b.getX();
         double dz = a.getZ() - b.getZ();
         return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    private static int localOpenSpace(World world, BlockPos p) {
+        int count = 0;
+        for (int[] d : DIRS) {
+            if (canOccupy(world, p.add(d[0], 0, d[1]))) count++;
+        }
+        return count;
+    }
+
+    private static boolean isClearColumn(World world, BlockPos pos) {
+        return clearAt(world, pos) && clearAt(world, pos.up());
+    }
+
+    private static boolean clearAt(World world, BlockPos pos) {
+        Block block = world.getBlockState(pos).getBlock();
+        Material material = block.getMaterial();
+        if (material == Material.air || block.isAir(world, pos)) return true;
+        if (material.isLiquid()) return false;
+        return !material.blocksMovement();
+    }
+
+    private static boolean isSolidFloor(World world, BlockPos pos) {
+        if (pos.getY() <= 0 || pos.getY() >= world.getHeight()) return false;
+        Block block = world.getBlockState(pos).getBlock();
+        Material material = block.getMaterial();
+        if (material == Material.air || material.isLiquid() || block.isAir(world, pos)) return false;
+        return block.isOpaqueCube() || block.isFullBlock() || material.blocksMovement();
     }
 
     private static boolean same(PathNode n, BlockPos p) {
