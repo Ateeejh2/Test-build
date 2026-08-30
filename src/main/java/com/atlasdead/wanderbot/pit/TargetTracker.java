@@ -1,5 +1,6 @@
 package com.atlasdead.wanderbot.pit;
 
+import com.atlasdead.wanderbot.pathfinding.CombatPathFinder;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemArmor;
@@ -10,13 +11,18 @@ import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Target selection for the Pit combat layer.
  *
  * Scans every player currently loaded by the client instead of limiting
  * acquisition to a 30-block search box. Spawn players are never eligible.
+ * A target is only accepted when CombatPathFinder can currently produce a
+ * route to it, and the selected target is held for a short lock interval so
+ * the bot does not flicker between nearby players every tick.
  */
 public class TargetTracker {
     private static final double SPAWN_MIN_X = -13.0D;
@@ -25,9 +31,17 @@ public class TargetTracker {
     private static final double SPAWN_MAX_Z = 19.0D;
     private static final double SPAWN_MIN_Y = 110.0D;
 
+    private static final long TARGET_LOCK_MS = 1500L;
+    private static final long PATH_CHECK_CACHE_MS = 750L;
+    private static final double TARGET_SWITCH_ADVANTAGE = 4.0D;
+
+    private final CombatPathFinder pathProbe = new CombatPathFinder();
+    private final Map<Integer, PathCheck> pathCache = new HashMap<Integer, PathCheck>();
+
     private EntityPlayer target;
     private double targetScore = Double.NEGATIVE_INFINITY;
     private ArmorProfile targetArmor = ArmorProfile.none();
+    private long targetLockUntil;
 
     public EntityPlayer findBest(final World world, final EntityPlayerSP self, final double maxRange,
                                  final PitZoneManager zones) {
@@ -39,6 +53,22 @@ public class TargetTracker {
         if (world == null || self == null) {
             clear();
             return null;
+        }
+
+        long now = System.currentTimeMillis();
+
+        // Keep the current target stable while it remains valid and its route
+        // remains available. This avoids target flicker caused by tiny distance
+        // changes between equally suitable players.
+        if (target != null
+                && isValidCandidate(target, self)
+                && !isInSpawn(target)
+                && (zones == null || !zones.isPlayerProtected(target))
+                && isEligiblePitArmor(target)
+                && (now < targetLockUntil || cachedPathAvailable(world, self, target, now))) {
+            targetScore = score(world, self, target, maxRange);
+            targetArmor = armorProfile(target);
+            if (now < targetLockUntil) return target;
         }
 
         List<EntityPlayer> candidates = new ArrayList<EntityPlayer>();
@@ -55,6 +85,7 @@ public class TargetTracker {
             if (isInSpawn(candidate)) continue;
             if (zones != null && zones.isPlayerProtected(candidate)) continue;
             if (!isEligiblePitArmor(candidate)) continue;
+            if (!cachedPathAvailable(world, self, candidate, now)) continue;
             candidates.add(candidate);
         }
 
@@ -71,10 +102,43 @@ public class TargetTracker {
         });
 
         EntityPlayer nearest = candidates.get(0);
+
+        // If the old target is still a valid reachable candidate, do not switch
+        // merely because another player is a tiny amount closer. Only switch
+        // when the new candidate is materially closer or the lock has expired.
+        if (target != null && target != nearest
+                && isValidCandidate(target, self)
+                && !isInSpawn(target)
+                && isEligiblePitArmor(target)
+                && cachedPathAvailable(world, self, target, now)) {
+            double oldDistance = self.getDistanceToEntity(target);
+            double newDistance = self.getDistanceToEntity(nearest);
+            if (now < targetLockUntil || newDistance + TARGET_SWITCH_ADVANTAGE >= oldDistance) {
+                targetScore = score(world, self, target, maxRange);
+                targetArmor = armorProfile(target);
+                return target;
+            }
+        }
+
         target = nearest;
+        targetLockUntil = now + TARGET_LOCK_MS;
         targetScore = score(world, self, nearest, maxRange);
         targetArmor = armorProfile(nearest);
         return nearest;
+    }
+
+    /** Check reachability without disturbing the active CombatPathFinder. */
+    private boolean cachedPathAvailable(World world, EntityPlayerSP self, EntityPlayer candidate, long now) {
+        if (candidate == null) return false;
+        int id = candidate.getEntityId();
+        PathCheck cached = pathCache.get(id);
+        if (cached != null && now - cached.checkedAt <= PATH_CHECK_CACHE_MS) {
+            return cached.reachable;
+        }
+
+        boolean reachable = pathProbe.canReachTarget(world, self, candidate, 3000);
+        pathCache.put(id, new PathCheck(now, reachable));
+        return reachable;
     }
 
     /** True when the player is inside the configured Pit spawn volume. */
@@ -196,6 +260,8 @@ public class TargetTracker {
         target = null;
         targetScore = Double.NEGATIVE_INFINITY;
         targetArmor = ArmorProfile.none();
+        targetLockUntil = 0L;
+        pathCache.clear();
     }
 
     /** Target remains viable at any loaded-player distance, but never in spawn. */
@@ -208,6 +274,16 @@ public class TargetTracker {
 
     public BlockPos targetFeet() {
         return target == null ? null : new BlockPos(target.posX, target.posY, target.posZ);
+    }
+
+    private static final class PathCheck {
+        final long checkedAt;
+        final boolean reachable;
+
+        PathCheck(long checkedAt, boolean reachable) {
+            this.checkedAt = checkedAt;
+            this.reachable = reachable;
+        }
     }
 
     public static final class ArmorProfile {
