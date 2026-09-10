@@ -1,0 +1,14 @@
+src/main/java/com/atlasdead/wanderbot/WanderBotMod.java
+src/main/java/com/atlasdead/wanderbot/bot/BotController.java
+src/main/java/com/atlasdead/wanderbot/bot/DeathRestartDetector.java          # new
+src/main/java/com/atlasdead/wanderbot/bot/KillAuraBridge.java              # new
+src/main/java/com/atlasdead/wanderbot/bot/MovementController.java
+src/main/java/com/atlasdead/wanderbot/config/WanderBotSettings.java
+src/main/java/com/atlasdead/wanderbot/gui/ClickGuiScreen.java
+src/main/java/com/atlasdead/wanderbot/humanization/Humanizer.java
+src/main/java/com/atlasdead/wanderbot/pathfinding/PathFinder.java
+src/main/java/com/atlasdead/wanderbot/pathfinding/CombatPathFinder.java
+src/main/java/com/atlasdead/wanderbot/pathfinding/CombatSteering.java
+src/main/java/com/atlasdead/wanderbot/pit/CombatExecutionController.java
+src/main/java/com/atlasdead/wanderbot/pit/CombatPhaseController.java
+src/main/java/com/atlasdead/wanderbot/pit/PitDecisionEngine.java
